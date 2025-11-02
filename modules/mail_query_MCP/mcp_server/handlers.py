@@ -160,8 +160,8 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
         # Define mail query tools
         mail_query_tools = [
             Tool(
-                name="query_email",
-                title="📧 Query Email",
+                name="search_messages",
+                title="📧 Search Messages",
                 description="Query emails and download/convert attachments to text. Date priority: start_date/end_date > days_back",
                 inputSchema={
                     "type": "object",
@@ -177,12 +177,12 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                         "days_back": {
                             "type": "integer",
                             "description": "Number of days to look back",
-                            "default": 30,
+                            "default": 30
                         },
                         "max_mails": {
                             "type": "integer",
                             "description": "Maximum number of mails to retrieve",
-                            "default": 300,
+                            "default": 300
                         },
                         "include_body": {
                             "type": "boolean",
@@ -190,18 +190,15 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                         },
                         "download_attachments": {
                             "type": "boolean",
-                            "description": "Download email attachments and convert supported formats (PDF, DOCX, XLSX, etc.) to text. When true, creates local copies and includes text content in response. When false, only shows attachment metadata (name, size)",
-                            "default": False,
+                            "description": "Download email attachments and convert supported formats (PDF, DOCX, XLSX, etc.) to text. When true, creates local copies and includes text content in response. When false, only shows attachment metadata (name, size)"
                         },
                         "save_emails": {
                             "type": "boolean",
-                            "description": "Save each email as individual text file to disk (mcp_attachments/{user_id}/). Files include headers, body, and attachment list. Useful for archiving or offline access. File names contain subject, date, and sender",
-                            "default": True,
+                            "description": "Save each email as individual text file to disk (mcp_attachments/{user_id}/). Files include headers, body, and attachment list. Useful for archiving or offline access. File names contain subject, date, and sender"
                         },
                         "save_csv": {
                             "type": "boolean",
-                            "description": "Export all retrieved emails' metadata to a single CSV file. Includes: subject, sender, date, read status, importance, attachment count/names, body preview (100 chars). Excel-compatible format with UTF-8 BOM encoding",
-                            "default": False,
+                            "description": "Export all retrieved emails' metadata to a single CSV file. Includes: subject, sender, date, read status, importance, attachment count/names, body preview (100 chars). Excel-compatible format with UTF-8 BOM encoding"
                         },
                         "start_date": {
                             "type": "string",
@@ -265,13 +262,11 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                             "properties": {
                                 "is_first_query": {
                                     "type": "boolean",
-                                    "description": "Whether this is the first query in the conversation. When true, all required fields must be provided. When false, missing fields may use previous values",
-                                    "default": True
+                                    "description": "Whether this is the first query in the conversation. When true, all required fields must be provided. When false, missing fields may use previous values"
                                 },
                                 "conversation_turn": {
                                     "type": "integer",
-                                    "description": "The conversation turn number (1 for first query, 2 for second, etc.)",
-                                    "default": 1
+                                    "description": "The conversation turn number (1 for first query, 2 for second, etc.)"
                                 },
                                 "previous_user_id": {
                                     "type": "string",
@@ -357,7 +352,7 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                 return await self.handle_calendar_call_tool(name, arguments)
 
             # Mail Query 툴 처리
-            if name == "query_email":
+            if name == "search_messages":
                 result = await self.tools.query_email(arguments)
                 return [TextContent(type="text", text=result)]
 
