@@ -243,7 +243,7 @@ class TeamsHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "sort_by": {
                             "type": "string",
@@ -260,7 +260,7 @@ class TeamsHandlers:
                             "description": "이름으로 필터링 (부분 일치)"
                         }
                     },
-                    "required": ["user_id"]
+                    "required": []
                 }
             ),
             Tool(
@@ -271,7 +271,7 @@ class TeamsHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "chat_id": {
                             "type": "string",
@@ -287,7 +287,7 @@ class TeamsHandlers:
                             "default": 50
                         }
                     },
-                    "required": ["user_id"]
+                    "required": []
                 }
             ),
             Tool(
@@ -329,7 +329,7 @@ class TeamsHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "keyword": {
                             "type": "string",
@@ -356,7 +356,7 @@ class TeamsHandlers:
                             "default": 500
                         }
                     },
-                    "required": ["user_id", "keyword"]
+                    "required": ["keyword"]
                 }
             ),
             Tool(
@@ -367,7 +367,7 @@ class TeamsHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "names": {
                             "type": "array",
@@ -394,7 +394,7 @@ class TeamsHandlers:
                             "description": "단일 저장용 - 영문 이름"
                         }
                     },
-                    "required": ["user_id"]
+                    "required": []
                 }
             ),
         ]

@@ -49,7 +49,7 @@ class OneDriveHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "folder_path": {
                             "type": "string",
@@ -60,7 +60,7 @@ class OneDriveHandlers:
                             "description": "검색어"
                         }
                     },
-                    "required": ["user_id"]
+                    "required": []
                 }
             ),
             Tool(
@@ -71,14 +71,14 @@ class OneDriveHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "file_path": {
                             "type": "string",
                             "description": "파일 경로 또는 파일 ID (예: Documents/myfile.txt)"
                         }
                     },
-                    "required": ["user_id", "file_path"]
+                    "required": ["file_path"]
                 }
             ),
             Tool(
@@ -89,7 +89,7 @@ class OneDriveHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "file_path": {
                             "type": "string",
@@ -104,7 +104,7 @@ class OneDriveHandlers:
                             "description": "덮어쓰기 여부 (기본값: true)"
                         }
                     },
-                    "required": ["user_id", "file_path", "content"]
+                    "required": ["file_path", "content"]
                 }
             ),
             Tool(
@@ -115,14 +115,14 @@ class OneDriveHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "file_path": {
                             "type": "string",
                             "description": "파일 경로 또는 파일 ID"
                         }
                     },
-                    "required": ["user_id", "file_path"]
+                    "required": ["file_path"]
                 }
             ),
             Tool(
@@ -133,7 +133,7 @@ class OneDriveHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "folder_path": {
                             "type": "string",
@@ -144,7 +144,7 @@ class OneDriveHandlers:
                             "description": "부모 폴더 경로 (생략 시 루트)"
                         }
                     },
-                    "required": ["user_id", "folder_path"]
+                    "required": ["folder_path"]
                 }
             ),
         ]

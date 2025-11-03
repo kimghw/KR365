@@ -284,52 +284,26 @@ class HTTPStreamingMailAttachmentServer:
             logger.info(f"  • Tool: {tool_name}")
             logger.info(f"  • Arguments (before auto-extraction): {json.dumps(tool_args, indent=2, ensure_ascii=False)}")
 
-            # 📧 user_id 자동 설정 (null이면 accounts 테이블 → DCR 순서로 조회)
+            # 📧 user_id 자동 주입 (request.state에서 가져오기 - 미들웨어가 이미 설정함)
             if not tool_args.get("user_id") and not tool_args.get("use_recent_account"):
-                logger.info("🔍 user_id not provided, attempting auto-detection...")
+                # 1순위: 미들웨어에서 설정된 request.state.user_id 사용 (DCR 인증 기반)
+                if hasattr(request.state, 'user_id') and request.state.user_id:
+                    tool_args["user_id"] = request.state.user_id
+                    logger.info(f"✅ Auto-injected user_id from authenticated session: {tool_args['user_id']}")
+                else:
+                    # 2순위: accounts 테이블에서 기본 계정 조회 (인증 없이 접근하는 경우)
+                    logger.info("🔍 No authenticated user, attempting fallback to default account...")
+                    try:
+                        from .handlers import get_default_user_id
+                        auto_user_id = get_default_user_id()
 
-                # 1순위: accounts 테이블에서 조회 (get_default_user_id)
-                try:
-                    from .handlers import get_default_user_id
-                    auto_user_id = get_default_user_id()
-
-                    if auto_user_id:
-                        tool_args["user_id"] = auto_user_id
-                        logger.info(f"✅ Auto-set user_id from accounts table: {auto_user_id}")
-                    else:
-                        logger.info("ℹ️  No active account found in accounts table")
-
-                        # 2순위: DCR OAuth에서 조회
-                        if hasattr(request.state, 'azure_object_id') and request.state.azure_object_id:
-                            azure_object_id = request.state.azure_object_id
-                            logger.info(f"🔐 Trying DCR OAuth - Azure Object ID: {azure_object_id}")
-
-                            try:
-                                # DCR Service로 user_email 조회 (claudedcr.db)
-                                from modules.dcr_oauth import DCRService
-                                dcr_service = DCRService()
-                                azure_tokens = dcr_service.get_azure_tokens_by_object_id(azure_object_id)
-
-                                if azure_tokens and azure_tokens.get("user_email"):
-                                    user_email = azure_tokens["user_email"]
-
-                                    # graphapi.db의 accounts 테이블에서 user_id 조회
-                                    query = "SELECT user_id FROM accounts WHERE email = ? AND is_active = 1 LIMIT 1"
-                                    result = self.db.fetch_one(query, (user_email,))
-
-                                    if result:
-                                        auto_user_id = result['user_id'] if isinstance(result, dict) else result[0]
-                                        tool_args["user_id"] = auto_user_id
-                                        logger.info(f"✅ Auto-set user_id from DCR OAuth: {auto_user_id} (email: {user_email})")
-                                    else:
-                                        logger.warning(f"⚠️  No account found for email: {user_email}")
-                                else:
-                                    logger.warning(f"⚠️  No Azure tokens found for object_id: {azure_object_id}")
-                            except Exception as e:
-                                logger.warning(f"⚠️  Failed to query DCR tokens: {str(e)}")
-
-                except Exception as e:
-                    logger.warning(f"⚠️  Failed to auto-detect user_id: {str(e)}")
+                        if auto_user_id:
+                            tool_args["user_id"] = auto_user_id
+                            logger.info(f"✅ Auto-set user_id from default account: {auto_user_id}")
+                        else:
+                            logger.warning("⚠️  No default account available")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Failed to get default user_id: {str(e)}")
             else:
                 if tool_args.get("user_id"):
                     logger.info(f"ℹ️  user_id explicitly provided: {tool_args['user_id']}")
@@ -936,7 +910,7 @@ class HTTPStreamingMailAttachmentServer:
             )
 
         async def oauth_token_handler(request):
-            """OAuth Token Endpoint - Azure AD 토큰 교환"""
+            """OAuth Token Endpoint - RFC 6749 준수 (authorization_code + refresh_token)"""
             from modules.dcr_oauth import DCRService
             from infra.core.oauth_client import get_oauth_client
 
@@ -944,24 +918,10 @@ class HTTPStreamingMailAttachmentServer:
                 # Parse form data
                 form = await request.form()
                 grant_type = form.get("grant_type")
-                code = form.get("code")
-                redirect_uri = form.get("redirect_uri")
                 client_id = form.get("client_id")
                 client_secret = form.get("client_secret")
 
-                if grant_type != "authorization_code":
-                    return JSONResponse(
-                        {"error": "unsupported_grant_type"},
-                        status_code=400,
-                    )
-
-                if not all([code, redirect_uri, client_id, client_secret]):
-                    return JSONResponse(
-                        {"error": "invalid_request"},
-                        status_code=400,
-                    )
-
-                # Verify client credentials
+                # Verify client credentials (both grant types require this)
                 dcr_service = DCRService()
                 if not dcr_service.verify_client_credentials(client_id, client_secret):
                     return JSONResponse(
@@ -969,89 +929,216 @@ class HTTPStreamingMailAttachmentServer:
                         status_code=401,
                     )
 
-                # Verify authorization code
-                code_data = dcr_service.verify_authorization_code(code, client_id, redirect_uri)
-                if not code_data:
-                    return JSONResponse(
-                        {"error": "invalid_grant"},
-                        status_code=400,
+                # ========== Grant Type: authorization_code (최초 로그인) ==========
+                if grant_type == "authorization_code":
+                    code = form.get("code")
+                    redirect_uri = form.get("redirect_uri")
+
+                    if not all([code, redirect_uri]):
+                        return JSONResponse(
+                            {"error": "invalid_request"},
+                            status_code=400,
+                        )
+
+                    # Verify authorization code
+                    code_data = dcr_service.verify_authorization_code(code, client_id, redirect_uri)
+                    if not code_data:
+                        return JSONResponse(
+                            {"error": "invalid_grant"},
+                            status_code=400,
+                        )
+
+                    # Get Azure auth code (새 스키마 사용)
+                    auth_code_result = dcr_service.db.fetch_one(
+                        "SELECT metadata FROM dcr_oauth WHERE token_type = 'auth_code' AND token_value = ?",
+                        (code,),
                     )
 
-                # Get Azure auth code (새 스키마 사용)
-                auth_code_result = dcr_service.db.fetch_one(
-                    "SELECT metadata FROM dcr_oauth WHERE token_type = 'auth_code' AND token_value = ?",
-                    (code,),
-                )
+                    if auth_code_result and auth_code_result[0]:
+                        import json
+                        metadata = json.loads(auth_code_result[0])
+                        azure_auth_code = metadata.get("azure_auth_code")
+                    else:
+                        azure_auth_code = None
 
-                if auth_code_result and auth_code_result[0]:
-                    import json
-                    metadata = json.loads(auth_code_result[0])
-                    azure_auth_code = metadata.get("azure_auth_code")
+                    azure_code_result = (azure_auth_code,) if azure_auth_code else None
+
+                    if not azure_code_result or not azure_code_result[0]:
+                        return JSONResponse(
+                            {"error": "invalid_grant", "error_description": "Azure code not found"},
+                            status_code=400,
+                        )
+
+                    azure_auth_code = azure_code_result[0]
+
+                    # Get client Azure config
+                    client = dcr_service.get_client(client_id)
+
+                    # Exchange Azure code for tokens
+                    base_url = f"{request.url.scheme}://{request.url.netloc}"
+                    azure_redirect_uri = f"{base_url}/oauth/azure_callback"
+
+                    oauth_client = get_oauth_client()
+                    token_info = await oauth_client.exchange_code_for_tokens_with_account_config(
+                        authorization_code=azure_auth_code,
+                        client_id=client["azure_application_id"],
+                        client_secret=client["azure_client_secret"],
+                        tenant_id=client["azure_tenant_id"],
+                        redirect_uri=azure_redirect_uri,
+                    )
+
+                    # Generate our own access token
+                    access_token = secrets.token_urlsafe(32)
+                    refresh_token = secrets.token_urlsafe(32)
+
+                    # Store token mapping
+                    from datetime import datetime, timedelta
+
+                    azure_expiry = datetime.fromisoformat(token_info["expiry"])
+
+                    # Get user info from code_data
+                    azure_object_id = code_data.get("azure_object_id")
+                    if not azure_object_id:
+                        return JSONResponse(
+                            {"error": "invalid_grant", "error_description": "User not authenticated"},
+                            status_code=400,
+                        )
+
+                    # Get user email from dcr_clients
+                    client_info = dcr_service.get_client(client_id)
+                    user_email = client_info.get("user_email")
+                    user_name = client_info.get("user_name")
+
+                    # Store tokens (fixed: store_token → store_tokens)
+                    dcr_service.store_tokens(
+                        dcr_client_id=client_id,
+                        dcr_access_token=access_token,
+                        dcr_refresh_token=refresh_token,
+                        expires_in=3600,
+                        scope=code_data["scope"],
+                        azure_object_id=azure_object_id,
+                        azure_access_token=token_info["access_token"],
+                        azure_refresh_token=token_info.get("refresh_token"),
+                        azure_expires_at=azure_expiry,
+                        user_email=user_email,
+                        user_name=user_name,
+                    )
+
+                    logger.info(f"✅ Token issued for DCR client: {client_id}")
+
+                    # RFC 6749 token response
+                    return JSONResponse(
+                        {
+                            "access_token": access_token,
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                            "refresh_token": refresh_token,
+                            "scope": code_data["scope"],
+                        },
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Cache-Control": "no-store",
+                            "Pragma": "no-cache",
+                        },
+                    )
+
+                # ========== Grant Type: refresh_token (토큰 갱신) ==========
+                elif grant_type == "refresh_token":
+                    refresh_token = form.get("refresh_token")
+
+                    if not refresh_token:
+                        return JSONResponse(
+                            {"error": "invalid_request", "error_description": "refresh_token is required"},
+                            status_code=400,
+                        )
+
+                    # Verify DCR refresh token
+                    refresh_data = dcr_service.verify_refresh_token(refresh_token, client_id)
+                    if not refresh_data:
+                        return JSONResponse(
+                            {"error": "invalid_grant", "error_description": "Invalid or expired refresh token"},
+                            status_code=400,
+                        )
+
+                    azure_object_id = refresh_data["azure_object_id"]
+                    scope = refresh_data["scope"]
+
+                    # Get Azure tokens by object_id
+                    azure_tokens = dcr_service.get_azure_tokens_by_object_id(azure_object_id)
+                    if not azure_tokens or not azure_tokens.get("refresh_token"):
+                        return JSONResponse(
+                            {"error": "invalid_grant", "error_description": "Azure refresh token not found"},
+                            status_code=400,
+                        )
+
+                    # Get client Azure config
+                    client = dcr_service.get_client(client_id)
+
+                    # Refresh Azure tokens
+                    oauth_client = get_oauth_client()
+
+                    # Parse scope string to list
+                    scope_list = scope.split() if scope else None
+
+                    new_azure_tokens = await oauth_client.refresh_access_token(
+                        refresh_token=azure_tokens["refresh_token"],
+                        client_id=client["azure_application_id"],
+                        client_secret=client["azure_client_secret"],
+                        tenant_id=client["azure_tenant_id"],
+                        scopes=scope_list,
+                    )
+
+                    # Generate new DCR tokens
+                    new_access_token = secrets.token_urlsafe(32)
+                    new_refresh_token = secrets.token_urlsafe(32)
+
+                    # Parse Azure token expiry
+                    from datetime import datetime, timedelta
+
+                    # new_azure_tokens["expiry"] is datetime object or ISO string
+                    if isinstance(new_azure_tokens["expiry"], str):
+                        azure_expiry = datetime.fromisoformat(new_azure_tokens["expiry"])
+                    else:
+                        azure_expiry = new_azure_tokens["expiry"]
+
+                    # Store new tokens
+                    dcr_service.store_tokens(
+                        dcr_client_id=client_id,
+                        dcr_access_token=new_access_token,
+                        dcr_refresh_token=new_refresh_token,
+                        expires_in=3600,
+                        scope=scope,
+                        azure_object_id=azure_object_id,
+                        azure_access_token=new_azure_tokens["access_token"],
+                        azure_refresh_token=new_azure_tokens.get("refresh_token", azure_tokens["refresh_token"]),
+                        azure_expires_at=azure_expiry,
+                        user_email=azure_tokens.get("user_email"),
+                        user_name=refresh_data.get("user_name"),
+                    )
+
+                    logger.info(f"✅ Token refreshed for DCR client: {client_id}")
+
+                    # RFC 6749 token response
+                    return JSONResponse(
+                        {
+                            "access_token": new_access_token,
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                            "refresh_token": new_refresh_token,
+                            "scope": scope,
+                        },
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Cache-Control": "no-store",
+                            "Pragma": "no-cache",
+                        },
+                    )
+
                 else:
-                    azure_auth_code = None
-
-                azure_code_result = (azure_auth_code,) if azure_auth_code else None
-
-                if not azure_code_result or not azure_code_result[0]:
                     return JSONResponse(
-                        {"error": "invalid_grant", "error_description": "Azure code not found"},
+                        {"error": "unsupported_grant_type", "error_description": f"Grant type '{grant_type}' is not supported"},
                         status_code=400,
                     )
-
-                azure_auth_code = azure_code_result[0]
-
-                # Get client Azure config
-                client = dcr_service.get_client(client_id)
-
-                # Exchange Azure code for tokens
-                base_url = f"{request.url.scheme}://{request.url.netloc}"
-                azure_redirect_uri = f"{base_url}/oauth/azure_callback"
-
-                oauth_client = get_oauth_client()
-                token_info = await oauth_client.exchange_code_for_tokens_with_account_config(
-                    authorization_code=azure_auth_code,
-                    client_id=client["azure_client_id"],
-                    client_secret=client["azure_client_secret"],
-                    tenant_id=client["azure_tenant_id"],
-                    redirect_uri=azure_redirect_uri,
-                )
-
-                # Generate our own access token
-                access_token = secrets.token_urlsafe(32)
-                refresh_token = secrets.token_urlsafe(32)
-
-                # Store token mapping
-                from datetime import datetime, timedelta
-
-                azure_expiry = datetime.fromisoformat(token_info["expiry"])
-                dcr_service.store_token(
-                    client_id=client_id,
-                    access_token=access_token,
-                    refresh_token=refresh_token,
-                    expires_in=3600,
-                    scope=code_data["scope"],
-                    azure_access_token=token_info["access_token"],
-                    azure_refresh_token=token_info.get("refresh_token"),
-                    azure_token_expiry=azure_expiry,
-                )
-
-                logger.info(f"✅ Token issued for DCR client: {client_id}")
-
-                # RFC 6749 token response
-                return JSONResponse(
-                    {
-                        "access_token": access_token,
-                        "token_type": "Bearer",
-                        "expires_in": 3600,
-                        "refresh_token": refresh_token,
-                        "scope": code_data["scope"],
-                    },
-                    headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Cache-Control": "no-store",
-                        "Pragma": "no-cache",
-                    },
-                )
 
             except Exception as e:
                 logger.error(f"❌ Token exchange failed: {str(e)}")

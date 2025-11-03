@@ -57,7 +57,7 @@ class OneNoteHandlers:
                         },
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "notebook_id": {
                             "type": "string",
@@ -76,7 +76,7 @@ class OneNoteHandlers:
                             "description": "페이지 제목 (list_pages: 필터링용)"
                         }
                     },
-                    "required": ["action", "user_id"]
+                    "required": ["action"]
                 }
             ),
             Tool(
@@ -92,7 +92,7 @@ class OneNoteHandlers:
                         },
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "page_id": {
                             "type": "string",
@@ -111,7 +111,7 @@ class OneNoteHandlers:
                             "description": "페이지 내용 (HTML) (create 시 필수)"
                         }
                     },
-                    "required": ["action", "user_id"]
+                    "required": ["action"]
                 }
             ),
             Tool(
@@ -122,7 +122,7 @@ class OneNoteHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "page_id": {
                             "type": "string",
@@ -133,7 +133,7 @@ class OneNoteHandlers:
                             "description": "추가할 내용 (HTML)"
                         }
                     },
-                    "required": ["user_id", "page_id", "content"]
+                    "required": ["page_id", "content"]
                 }
             ),
             Tool(
@@ -144,7 +144,7 @@ class OneNoteHandlers:
                     "properties": {
                         "user_id": {
                             "type": "string",
-                            "description": "사용자 ID"
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
                         "section_id": {
                             "type": "string",
@@ -171,7 +171,7 @@ class OneNoteHandlers:
                             "description": "페이지 제목 (페이지 저장 시 필수)"
                         }
                     },
-                    "required": ["user_id"]
+                    "required": []
                 }
             ),
         ]
