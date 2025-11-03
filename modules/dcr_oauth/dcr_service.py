@@ -94,7 +94,11 @@ class DCRService:
         _save_azure_config_helper(self)
 
     async def register_client(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
-        """RFC 7591: 동적 클라이언트 등록 (플랫폼별 독립 클라이언트)"""
+        """RFC 7591: 동적 클라이언트 등록 (플랫폼별 독립 클라이언트)
+
+        Note: 초기 등록 시에는 azure_object_id = NULL
+        로그인 완료 후 update_client_user()로 사용자 정보 업데이트
+        """
         if not all([self.azure_application_id, self.azure_client_secret]):
             raise ValueError("Azure AD configuration not available")
 
@@ -109,13 +113,15 @@ class DCRService:
             raise ValueError("redirect_uris is required")
 
         # 첫 번째 redirect_uri를 기준으로 기존 클라이언트 확인 (플랫폼별 구분)
+        # 주의: 로그인 전에는 사용자 구분 불가, NULL인 것 중에서 찾음
         primary_redirect_uri = redirect_uris[0] if isinstance(redirect_uris, list) else redirect_uris
 
         existing_query = """
-        SELECT dcr_client_id, dcr_client_secret, created_at
+        SELECT dcr_client_id, dcr_client_secret, created_at, azure_object_id
         FROM dcr_clients
         WHERE azure_application_id = ?
           AND json_extract(dcr_redirect_uris, '$[0]') = ?
+          AND azure_object_id IS NULL
         ORDER BY created_at DESC
         LIMIT 1
         """
@@ -126,26 +132,27 @@ class DCRService:
         )
 
         if existing_client:
-            # 기존 플랫폼 클라이언트 재사용
+            # 기존 미할당 클라이언트 재사용 (로그인 전 상태)
             dcr_client_id = existing_client[0]
             dcr_client_secret = self.crypto.account_decrypt_sensitive_data(
                 existing_client[1]
             )
             issued_at = int(datetime.fromisoformat(existing_client[2]).timestamp())
 
-            logger.info(f"♻️ Reusing existing DCR client for {primary_redirect_uri}: {dcr_client_id}")
+            logger.info(f"♻️ Reusing unassigned DCR client for {primary_redirect_uri}: {dcr_client_id}")
         else:
-            # 새 클라이언트 생성
+            # 새 클라이언트 생성 (사용자 미할당 상태)
             dcr_client_id = f"dcr_{secrets.token_urlsafe(16)}"
             dcr_client_secret = secrets.token_urlsafe(32)
             issued_at = int(datetime.now(timezone.utc).timestamp())
 
-            # dcr_clients 테이블에 저장
+            # dcr_clients 테이블에 저장 (azure_object_id = NULL)
             query = """
             INSERT INTO dcr_clients (
                 dcr_client_id, dcr_client_secret, dcr_client_name,
-                dcr_redirect_uris, dcr_grant_types, dcr_requested_scope, azure_application_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                dcr_redirect_uris, dcr_grant_types, dcr_requested_scope,
+                azure_application_id, azure_object_id, user_email
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
             """
 
             self._execute_query(
@@ -161,7 +168,7 @@ class DCRService:
                 ),
             )
 
-            logger.info(f"✅ New DCR client registered: {dcr_client_id}")
+            logger.info(f"✅ New unassigned DCR client registered: {dcr_client_id}")
 
         return {
             "client_id": dcr_client_id,
@@ -173,6 +180,77 @@ class DCRService:
             "redirect_uris": redirect_uris,
             "scope": scope,
         }
+
+    def update_client_user(
+        self,
+        dcr_client_id: str,
+        azure_object_id: str,
+        user_email: str,
+        redirect_uri: str
+    ) -> str:
+        """로그인 완료 후 클라이언트에 사용자 정보를 연결
+
+        Args:
+            dcr_client_id: 등록된 DCR 클라이언트 ID
+            azure_object_id: Azure 사용자 Object ID
+            user_email: 사용자 이메일
+            redirect_uri: 클라이언트의 redirect URI
+
+        Returns:
+            사용할 client_id (기존 사용자 클라이언트가 있으면 그것, 없으면 현재 클라이언트)
+        """
+        # 1. 이미 이 사용자가 같은 플랫폼에 등록한 클라이언트가 있는지 확인
+        existing_user_client_query = """
+        SELECT dcr_client_id
+        FROM dcr_clients
+        WHERE azure_application_id = ?
+          AND json_extract(dcr_redirect_uris, '$[0]') = ?
+          AND azure_object_id = ?
+        LIMIT 1
+        """
+
+        existing_user_client = self._fetch_one(
+            existing_user_client_query,
+            (self.azure_application_id, redirect_uri, azure_object_id)
+        )
+
+        if existing_user_client:
+            # 기존 사용자 클라이언트가 있음 - 현재 클라이언트는 삭제하고 기존 것 재사용
+            existing_client_id = existing_user_client[0]
+
+            # 현재 클라이언트가 기존 클라이언트와 다르면 현재 클라이언트 삭제
+            if dcr_client_id != existing_client_id:
+                # 현재 클라이언트와 관련된 토큰들 삭제
+                self._execute_query(
+                    "DELETE FROM dcr_tokens WHERE dcr_client_id = ?",
+                    (dcr_client_id,)
+                )
+                # 현재 클라이언트 삭제
+                self._execute_query(
+                    "DELETE FROM dcr_clients WHERE dcr_client_id = ?",
+                    (dcr_client_id,)
+                )
+                logger.info(f"♻️ Reusing existing client for user {user_email}: {existing_client_id} (deleted {dcr_client_id})")
+            else:
+                logger.info(f"♻️ Client already linked to user {user_email}: {existing_client_id}")
+
+            return existing_client_id
+        else:
+            # 기존 사용자 클라이언트가 없음 - 현재 클라이언트에 사용자 정보 업데이트
+            update_query = """
+            UPDATE dcr_clients
+            SET azure_object_id = ?, user_email = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE dcr_client_id = ?
+            """
+
+            self._execute_query(
+                update_query,
+                (azure_object_id, user_email, dcr_client_id)
+            )
+
+            logger.info(f"✅ Linked client {dcr_client_id} to user {user_email} (object_id: {azure_object_id})")
+
+            return dcr_client_id
 
     def save_azure_tokens_and_sync(
         self,

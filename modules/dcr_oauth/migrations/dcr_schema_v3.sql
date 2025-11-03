@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS dcr_azure_users (
 CREATE INDEX IF NOT EXISTS idx_dcr_azure_users_expires ON dcr_azure_users(expires_at);
 CREATE INDEX IF NOT EXISTS idx_dcr_azure_users_email ON dcr_azure_users(user_email);
 
--- 3) DCR 클라이언트 (Claude AI가 등록한 가상 클라이언트)
+-- 3) DCR 클라이언트 (플랫폼 + 사용자별 독립 클라이언트)
 CREATE TABLE IF NOT EXISTS dcr_clients (
     dcr_client_id TEXT PRIMARY KEY,       -- dcr_xxx (DCR 서버가 생성)
     dcr_client_secret TEXT NOT NULL,      -- DCR 클라이언트 시크릿 (암호화)
@@ -37,10 +37,18 @@ CREATE TABLE IF NOT EXISTS dcr_clients (
     dcr_grant_types TEXT,                 -- JSON array
     dcr_requested_scope TEXT,
     azure_application_id TEXT NOT NULL,   -- 어느 Azure 앱을 사용하는지
+    azure_object_id TEXT,                 -- 어느 사용자가 등록했는지 (NULL = 로그인 전)
+    user_email TEXT,                      -- 사용자 이메일 (참고용)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (azure_application_id) REFERENCES dcr_azure_app(application_id)
+    FOREIGN KEY (azure_application_id) REFERENCES dcr_azure_app(application_id),
+    FOREIGN KEY (azure_object_id) REFERENCES dcr_azure_users(object_id) ON DELETE SET NULL
 );
+
+-- 플랫폼 + 사용자별 유니크 제약 (같은 사용자가 같은 플랫폼에 중복 등록 방지)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dcr_clients_platform_user
+ON dcr_clients(azure_application_id, json_extract(dcr_redirect_uris, '$[0]'), azure_object_id)
+WHERE azure_object_id IS NOT NULL;
 
 -- 4) DCR 토큰 (DCR 서버가 발급한 토큰)
 CREATE TABLE IF NOT EXISTS dcr_tokens (

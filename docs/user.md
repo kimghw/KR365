@@ -258,3 +258,235 @@ DB 상태:
 
 - 테이블 스키마: [modules/dcr_oauth/migrations/dcr_schema_v3.sql](modules/dcr_oauth/migrations/dcr_schema_v3.sql#L14-L30)
 - 저장 로직: modules/dcr_oauth/dcr_service.py (INSERT OR REPLACE 사용)
+
+---
+
+## 3. dcr_clients 테이블 데이터 저장 방식 (사용자별 격리)
+
+### 질문
+`dcr_clients` 테이블은 사용자별로 독립적인 클라이언트를 생성하는가?
+
+### 답변
+**예, 플랫폼 + 사용자 조합별로 독립적인 클라이언트를 유지합니다.**
+
+### 상세 설명
+
+#### 테이블 구조
+```sql
+CREATE TABLE IF NOT EXISTS dcr_clients (
+    dcr_client_id TEXT PRIMARY KEY,
+    dcr_client_secret TEXT NOT NULL,
+    dcr_client_name TEXT,
+    dcr_redirect_uris TEXT,
+    dcr_grant_types TEXT,
+    dcr_requested_scope TEXT,
+    azure_application_id TEXT NOT NULL,
+    azure_object_id TEXT,  -- 어느 사용자가 등록했는지 (NULL = 로그인 전)
+    user_email TEXT,        -- 사용자 이메일 (참고용)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (azure_application_id) REFERENCES dcr_azure_app(application_id),
+    FOREIGN KEY (azure_object_id) REFERENCES dcr_azure_users(object_id) ON DELETE SET NULL
+);
+
+-- 플랫폼 + 사용자별 유니크 제약
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dcr_clients_platform_user
+ON dcr_clients(azure_application_id, json_extract(dcr_redirect_uris, '$[0]'), azure_object_id)
+WHERE azure_object_id IS NOT NULL;
+```
+
+**핵심 특징:**
+- `azure_object_id`: 사용자 식별자 (로그인 전에는 NULL)
+- Unique Index: 같은 플랫폼에 같은 사용자가 중복 등록 방지
+
+#### 2단계 등록 로직
+
+**1단계: 클라이언트 등록 (로그인 전)** - [dcr_service.py:register_client](modules/dcr_oauth/dcr_service.py#L96-L182)
+
+```python
+async def register_client(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+    """초기 등록 시 azure_object_id = NULL로 생성"""
+
+    # 미할당 클라이언트 찾기 (같은 플랫폼 + redirect_uri, object_id = NULL)
+    existing_query = """
+    SELECT dcr_client_id, dcr_client_secret, created_at
+    FROM dcr_clients
+    WHERE azure_application_id = ?
+      AND json_extract(dcr_redirect_uris, '$[0]') = ?
+      AND azure_object_id IS NULL  -- 미할당만
+    ORDER BY created_at DESC
+    LIMIT 1
+    """
+
+    if existing_client:
+        # 기존 미할당 클라이언트 재사용
+        return existing_client_info
+    else:
+        # 새 클라이언트 생성 (azure_object_id = NULL)
+        INSERT INTO dcr_clients (..., azure_object_id, user_email)
+        VALUES (..., NULL, NULL)
+```
+
+**2단계: 사용자 연결 (로그인 완료 후)** - [dcr_service.py:update_client_user](modules/dcr_oauth/dcr_service.py#L184-L253)
+
+```python
+def update_client_user(
+    self,
+    dcr_client_id: str,
+    azure_object_id: str,
+    user_email: str,
+    redirect_uri: str
+) -> str:
+    """로그인 완료 후 클라이언트에 사용자 정보를 연결
+
+    Returns:
+        사용할 client_id (기존 것이 있으면 그것, 없으면 현재 것)
+    """
+
+    # 1. 이미 이 사용자가 같은 플랫폼에 등록한 클라이언트 확인
+    existing_user_client = SELECT dcr_client_id
+        FROM dcr_clients
+        WHERE azure_application_id = ?
+          AND json_extract(dcr_redirect_uris, '$[0]') = ?
+          AND azure_object_id = ?  -- 사용자가 이미 할당된 클라이언트
+
+    if existing_user_client:
+        # 기존 클라이언트 재사용 - 현재 클라이언트 삭제
+        DELETE FROM dcr_tokens WHERE dcr_client_id = ?  # 현재 클라이언트 토큰 삭제
+        DELETE FROM dcr_clients WHERE dcr_client_id = ?  # 현재 클라이언트 삭제
+        return existing_client_id  # 기존 클라이언트 ID 반환
+    else:
+        # 현재 클라이언트에 사용자 정보 업데이트
+        UPDATE dcr_clients
+        SET azure_object_id = ?, user_email = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE dcr_client_id = ?
+        return dcr_client_id  # 현재 클라이언트 ID 반환
+```
+
+**호출 위치:** [unified_http_server.py:oauth_azure_callback_handler](entrypoints/production/unified_http_server.py#L1351-L1368)
+
+```python
+# Azure 로그인 완료 후
+final_client_id = dcr_service.update_client_user(
+    dcr_client_id=client_id,
+    azure_object_id=azure_object_id,
+    user_email=user_email,
+    redirect_uri=redirect_uri
+)
+
+# 만약 기존 클라이언트로 교체되었다면, auth_code의 client_id도 업데이트
+if final_client_id != client_id:
+    UPDATE dcr_tokens
+    SET dcr_client_id = ?
+    WHERE dcr_token_value = ? AND dcr_token_type = 'authorization_code'
+```
+
+---
+
+## 시나리오별 동작 (3)
+
+### 시나리오 1: 사용자 A가 Claude.ai에서 첫 로그인
+
+```
+1. Claude.ai → POST /oauth/register
+   → dcr_clients 생성 (client_id: dcr_aaa, object_id: NULL)
+
+2. Claude.ai → GET /oauth/authorize?client_id=dcr_aaa
+   → Azure 로그인 페이지로 리디렉트
+
+3. 사용자 A 로그인 (object_id: user-a-111)
+   → Azure callback → update_client_user()
+   → dcr_clients 업데이트 (client_id: dcr_aaa, object_id: user-a-111)
+
+결과:
+| dcr_client_id | azure_object_id | user_email          |
+|---------------|-----------------|---------------------|
+| dcr_aaa       | user-a-111      | alice@company.com   |
+```
+
+### 시나리오 2: 사용자 B가 Claude.ai에서 로그인
+
+```
+1. Claude.ai → POST /oauth/register
+   → 기존 미할당 클라이언트 없음 (user-a-111이 이미 dcr_aaa 사용 중)
+   → 새 클라이언트 생성 (client_id: dcr_bbb, object_id: NULL)
+
+2. 사용자 B 로그인 (object_id: user-b-222)
+   → dcr_clients 업데이트 (client_id: dcr_bbb, object_id: user-b-222)
+
+결과:
+| dcr_client_id | azure_object_id | user_email          |
+|---------------|-----------------|---------------------|
+| dcr_aaa       | user-a-111      | alice@company.com   |
+| dcr_bbb       | user-b-222      | bob@company.com     |
+```
+
+### 시나리오 3: 사용자 A가 다시 Claude.ai에 연결 (재등록)
+
+```
+1. Claude.ai → POST /oauth/register
+   → 새 클라이언트 생성 (client_id: dcr_ccc, object_id: NULL)
+
+2. 사용자 A 로그인 (object_id: user-a-111)
+   → update_client_user() 실행
+   → 기존 클라이언트 확인: dcr_aaa (user-a-111이 이미 등록됨)
+   → dcr_ccc 삭제, dcr_aaa 재사용
+
+결과:
+| dcr_client_id | azure_object_id | user_email          |
+|---------------|-----------------|---------------------|
+| dcr_aaa       | user-a-111      | alice@company.com   |  ← 계속 사용
+| dcr_bbb       | user-b-222      | bob@company.com     |
+```
+
+### 시나리오 4: 사용자 A가 ChatGPT에서 로그인
+
+```
+1. ChatGPT → POST /oauth/register (redirect_uri: chatgpt.com)
+   → 새 클라이언트 생성 (client_id: dcr_ddd, object_id: NULL)
+
+2. 사용자 A 로그인 (object_id: user-a-111)
+   → dcr_clients 업데이트 (client_id: dcr_ddd, object_id: user-a-111)
+
+결과:
+| dcr_client_id | azure_object_id | user_email          | redirect_uri      |
+|---------------|-----------------|---------------------|-------------------|
+| dcr_aaa       | user-a-111      | alice@company.com   | claude.ai         |
+| dcr_bbb       | user-b-222      | bob@company.com     | claude.ai         |
+| dcr_ddd       | user-a-111      | alice@company.com   | chatgpt.com       |
+
+→ 사용자 A는 플랫폼별로 독립적인 클라이언트 유지!
+```
+
+---
+
+## 정리 (3)
+
+### dcr_clients 테이블 특성
+
+| 상황 | 동작 | 레코드 수 변화 |
+|------|------|----------------|
+| 첫 등록 (로그인 전) | INSERT (object_id=NULL) | +1 미할당 클라이언트 |
+| 로그인 완료 | UPDATE (object_id 업데이트) | 미할당 → 할당됨 |
+| 재로그인 (같은 플랫폼) | 기존 클라이언트 재사용, 새 클라이언트 삭제 | 0 (변화 없음) |
+| 다른 플랫폼 로그인 | 새 클라이언트 생성 | +1 (플랫폼별 독립) |
+
+### 사용자별 격리 보장
+
+```
+사용자 A + Claude.ai → dcr_client_A_Claude → Bearer token A_Claude → Azure token A
+사용자 B + Claude.ai → dcr_client_B_Claude → Bearer token B_Claude → Azure token B
+사용자 A + ChatGPT   → dcr_client_A_ChatGPT → Bearer token A_ChatGPT → Azure token A
+```
+
+**핵심 보안:**
+- Bearer token → dcr_client_id → azure_object_id → Azure access_token
+- 사용자별로 독립적인 Bearer token 사용
+- Cross-user 데이터 접근 불가능
+
+### 관련 파일 (3)
+
+- 테이블 스키마: [modules/dcr_oauth/migrations/dcr_schema_v3.sql](modules/dcr_oauth/migrations/dcr_schema_v3.sql#L32-L51)
+- 등록 로직: [modules/dcr_oauth/dcr_service.py:register_client](modules/dcr_oauth/dcr_service.py#L96-L182)
+- 사용자 연결: [modules/dcr_oauth/dcr_service.py:update_client_user](modules/dcr_oauth/dcr_service.py#L184-L253)
+- 호출 위치: [entrypoints/production/unified_http_server.py:oauth_azure_callback_handler](entrypoints/production/unified_http_server.py#L1351-L1368)

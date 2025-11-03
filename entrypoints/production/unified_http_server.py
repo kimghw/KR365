@@ -1348,6 +1348,25 @@ class UnifiedMCPServer:
                     dcr_service._execute_query(update_auth_code_query, (azure_object_id, auth_code))
                     logger.info(f"✅ Authorization code updated with object_id: {azure_object_id}")
 
+                    # 클라이언트에 사용자 정보 연결 (중요!)
+                    # redirect_uri 추출 (metadata에서 가져오기)
+                    final_client_id = dcr_service.update_client_user(
+                        dcr_client_id=client_id,
+                        azure_object_id=azure_object_id,
+                        user_email=user_email,
+                        redirect_uri=redirect_uri
+                    )
+
+                    # 만약 기존 클라이언트로 교체되었다면, auth_code의 client_id도 업데이트
+                    if final_client_id != client_id:
+                        update_auth_code_client_query = """
+                        UPDATE dcr_tokens
+                        SET dcr_client_id = ?
+                        WHERE dcr_token_value = ? AND dcr_token_type = 'authorization_code'
+                        """
+                        dcr_service._execute_query(update_auth_code_client_query, (final_client_id, auth_code))
+                        logger.info(f"✅ Authorization code updated to use existing client: {final_client_id}")
+
                 # Claude로 리다이렉트 (원본 auth_code와 state 포함)
                 redirect_params = {
                     "code": auth_code,
