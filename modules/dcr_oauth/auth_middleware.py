@@ -27,36 +27,34 @@ def get_user_id_from_azure_object_id(azure_object_id: str) -> Optional[str]:
     """
     try:
         # DCR DB에서 user_email 조회
-        from infra.core.database import get_dcr_database_manager
-        dcr_db = get_dcr_database_manager()
+        from modules.dcr_oauth import DCRService
+        dcr_service = DCRService()
 
-        email_result = dcr_db.execute_query(
+        email_result = dcr_service._fetch_one(
             "SELECT user_email FROM dcr_azure_users WHERE object_id = ?",
-            (azure_object_id,),
-            fetch_result=True
+            (azure_object_id,)
         )
 
-        if not email_result or len(email_result) == 0:
+        if not email_result:
             logger.warning(f"⚠️ Azure Object ID에 해당하는 이메일을 찾을 수 없음: {azure_object_id}")
             return None
 
-        user_email = email_result[0][0]
+        user_email = email_result[0]
 
         # accounts DB에서 user_id 조회
         from infra.core.database import get_database_manager
         accounts_db = get_database_manager()
 
-        user_result = accounts_db.execute_query(
-            "SELECT user_id FROM accounts WHERE email = ? AND is_active = TRUE",
-            (user_email,),
-            fetch_result=True
+        user_result = accounts_db.fetch_one(
+            "SELECT user_id FROM accounts WHERE email = ? AND is_active = 1",
+            (user_email,)
         )
 
-        if not user_result or len(user_result) == 0:
+        if not user_result:
             logger.warning(f"⚠️ 이메일에 해당하는 활성 계정을 찾을 수 없음: {user_email}")
             return None
 
-        user_id = user_result[0][0]
+        user_id = user_result[0]
         logger.info(f"✅ Azure Object ID → user_id 매핑 성공: {azure_object_id} → {user_id}")
         return user_id
 
