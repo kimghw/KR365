@@ -525,6 +525,89 @@ class DCRService:
 
         return {"scope": metadata.get("scope"), "state": metadata.get("state"), "azure_object_id": azure_object_id}
 
+    def verify_refresh_token(
+        self,
+        refresh_token: str,
+        dcr_client_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """DCR Refresh 토큰 검증 (RFC 6749)
+
+        Args:
+            refresh_token: DCR refresh token (평문)
+            dcr_client_id: DCR 클라이언트 ID
+
+        Returns:
+            토큰 정보 (azure_object_id, scope, user_name 포함) 또는 None
+        """
+        # DCR refresh token은 암호화되어 저장되므로 모든 active refresh token을 조회
+        query = """
+        SELECT dcr_client_id, dcr_token_value, azure_object_id, metadata, expires_at, dcr_status
+        FROM dcr_tokens
+        WHERE dcr_token_type = 'refresh'
+          AND dcr_status = 'active'
+          AND expires_at > CURRENT_TIMESTAMP
+        """
+
+        results = self._fetch_all(query)
+
+        if not results:
+            logger.warning(f"❌ No active refresh tokens found in DB")
+            return None
+
+        # 암호화된 토큰을 하나씩 복호화하여 비교
+        for row in results:
+            stored_client_id, encrypted_token, azure_object_id, metadata_str, expires_at, status = row
+
+            try:
+                # 복호화
+                decrypted_token = self.crypto.account_decrypt_sensitive_data(encrypted_token)
+
+                # 토큰 비교
+                if not secrets.compare_digest(decrypted_token, refresh_token):
+                    continue
+
+                # 클라이언트 ID 확인
+                if stored_client_id != dcr_client_id:
+                    logger.warning(f"❌ Refresh token client ID mismatch")
+                    return None
+
+                # 메타데이터 파싱
+                metadata = json.loads(metadata_str) if metadata_str else {}
+
+                # Azure Object ID가 없으면 에러
+                if not azure_object_id:
+                    logger.warning(f"❌ Refresh token has no azure_object_id")
+                    return None
+
+                # scope 가져오기 (metadata 또는 dcr_clients 테이블에서)
+                scope = metadata.get("scope")
+                if not scope:
+                    # dcr_clients에서 scope 조회
+                    client = self.get_client(dcr_client_id)
+                    scope = client.get("dcr_requested_scope", "")
+
+                # user_name 가져오기 (dcr_azure_users 테이블에서)
+                user_query = """
+                SELECT user_name FROM dcr_azure_users WHERE object_id = ?
+                """
+                user_result = self._fetch_one(user_query, (azure_object_id,))
+                user_name = user_result[0] if user_result else None
+
+                logger.info(f"✅ Refresh token verified for client: {dcr_client_id}, user: {azure_object_id}")
+
+                return {
+                    "azure_object_id": azure_object_id,
+                    "scope": scope,
+                    "user_name": user_name,
+                }
+
+            except Exception as e:
+                logger.error(f"❌ Error decrypting refresh token: {e}")
+                continue
+
+        logger.warning(f"❌ No matching refresh token found for client: {dcr_client_id}")
+        return None
+
     def store_tokens(
         self,
         dcr_client_id: str,
@@ -621,18 +704,19 @@ class DCRService:
             """
             self._execute_query(invalidate_refresh, (dcr_client_id,))
 
-            # 새 refresh 토큰 저장
+            # 새 refresh 토큰 저장 (azure_object_id 포함)
             refresh_expires = datetime.now(timezone.utc) + timedelta(days=30)
             refresh_query = """
             INSERT INTO dcr_tokens (
-                dcr_token_value, dcr_client_id, dcr_token_type, expires_at, dcr_status
-            ) VALUES (?, ?, 'refresh', ?, 'active')
+                dcr_token_value, dcr_client_id, dcr_token_type, azure_object_id, expires_at, dcr_status
+            ) VALUES (?, ?, 'refresh', ?, ?, 'active')
             """
             self._execute_query(
                 refresh_query,
                 (
                     self.crypto.account_encrypt_sensitive_data(dcr_refresh_token),
                     dcr_client_id,
+                    azure_object_id,
                     refresh_expires,
                 ),
             )
@@ -640,8 +724,8 @@ class DCRService:
     def verify_bearer_token(self, token: str) -> Optional[Dict[str, Any]]:
         """DCR Bearer 토큰 검증
 
-        Note: dcr_token_value는 암호화되지 않은 원본 토큰 값이 저장됨
-        클라이언트가 보낸 Bearer 토큰과 직접 비교
+        Note: dcr_token_value는 암호화되어 저장됨 (store_tokens 참조)
+        클라이언트가 보낸 Bearer 토큰을 복호화 후 비교
         """
         query = """
         SELECT dcr_client_id, dcr_token_value, azure_object_id
@@ -660,12 +744,15 @@ class DCRService:
             return None
 
         for i, row in enumerate(results):
-            dcr_client_id, stored_token, azure_object_id = row
+            dcr_client_id, encrypted_token, azure_object_id = row
             logger.info(f"🔍 [verify_bearer_token] Checking token {i+1}/{len(results)} for client: {dcr_client_id}")
 
             try:
-                # DB의 토큰과 직접 비교 (암호화 불필요 - 이미 원본 토큰이 저장됨)
-                if secrets.compare_digest(stored_token, token):
+                # 암호화된 토큰 복호화
+                decrypted_token = self.crypto.account_decrypt_sensitive_data(encrypted_token)
+
+                # 토큰 비교
+                if secrets.compare_digest(decrypted_token, token):
                     logger.info(f"✅ [verify_bearer_token] Token matched for client: {dcr_client_id}")
                     return {
                         "dcr_client_id": dcr_client_id,
