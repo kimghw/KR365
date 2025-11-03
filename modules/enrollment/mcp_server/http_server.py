@@ -196,8 +196,13 @@ class HTTPStreamingAuthServer:
             logger.info(f"  • Tool: {tool_name}")
             logger.info(f"  • Arguments: {json.dumps(tool_args, indent=2, ensure_ascii=False)}")
 
+            # Extract authenticated user_id from request.state (set by OAuth middleware)
+            authenticated_user_id = getattr(request.state, "user_id", None)
+            if authenticated_user_id:
+                logger.info(f"🔐 Authenticated user_id: {authenticated_user_id}")
+
             try:
-                results = await self.handlers.handle_call_tool(tool_name, tool_args)
+                results = await self.handlers.handle_call_tool(tool_name, tool_args, authenticated_user_id)
 
                 response = {
                     "jsonrpc": "2.0",

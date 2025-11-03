@@ -551,10 +551,29 @@ class UnifiedMCPServer:
                 import json
                 request_data = json.loads(body) if body else {}
 
-                dcr_service = DCRService()
-                response = await dcr_service.register_client(request_data)
+                # 세션 ID 추출 (우선순위: mcp-session-id > x-claude-session-id > traceparent)
+                logger.info(f"📋 DCR Register Headers: {dict(request.headers)}")
+                session_id = request.headers.get("mcp-session-id") or request.headers.get("x-claude-session-id")
 
-                logger.info(f"✅ DCR client registered: {response['client_id']}")
+                # traceparent에서 trace-id 추출 (형식: version-trace_id-parent_id-flags)
+                if not session_id:
+                    traceparent = request.headers.get("traceparent")
+                    if traceparent:
+                        parts = traceparent.split("-")
+                        if len(parts) >= 2:
+                            session_id = parts[1]  # trace_id 사용
+                            logger.info(f"🔍 Using traceparent trace_id as session_id: {session_id}")
+
+                logger.info(f"🔍 Extracted session_id: {session_id}")
+
+                dcr_service = DCRService()
+                response = await dcr_service.register_client(request_data, mcp_session_id=session_id)
+
+                if session_id:
+                    session_type = "MCP" if request.headers.get("mcp-session-id") else "Claude"
+                    logger.info(f"✅ DCR client registered: {response['client_id']} ({session_type} session: {session_id})")
+                else:
+                    logger.info(f"✅ DCR client registered: {response['client_id']}")
 
                 return JSONResponse(
                     response,
@@ -613,56 +632,12 @@ class UnifiedMCPServer:
                 client = dcr_service.get_client(client_id)
 
                 if not client:
-                    # 클라이언트가 없으면 자동 등록 시도
-                    logger.warning(f"⚠️ Client not found: {client_id}, attempting auto-registration")
-
-                    # redirect_uri를 기반으로 플랫폼 식별 및 자동 등록
-                    try:
-                        # 플랫폼별 기본 이름 설정
-                        if "claude.ai" in redirect_uri:
-                            client_name = "Claude AI Connector"
-                        elif "chatgpt.com" in redirect_uri:
-                            client_name = "ChatGPT Connector"
-                        else:
-                            client_name = "MCP Connector"
-
-                        # 자동 등록 수행 - 필수 scope 강제 추가
-                        required_scopes = {"Mail.Read", "Mail.Send", "Calendars.ReadWrite", "User.Read", "offline_access"}
-                        requested_scopes = set(scope.split())
-                        final_scope = " ".join(required_scopes | requested_scopes)
-
-                        registration_result = await dcr_service.register_client({
-                            "client_name": client_name,
-                            "redirect_uris": [redirect_uri],
-                            "grant_types": ["authorization_code", "refresh_token"],
-                            "scope": final_scope
-                        })
-
-                        logger.info(f"🔐 Registered with enhanced scope: {final_scope}")
-
-                        logger.info(f"✅ Auto-registered new client: {registration_result['client_id']}")
-
-                        # OAuth 표준에 따라 redirect_uri로 에러와 새 credential 전달
-                        from starlette.responses import RedirectResponse
-                        error_params = {
-                            "error": "client_registration_required",
-                            "error_description": "Client not found. New client registered.",
-                            "new_client_id": registration_result['client_id'],
-                            "new_client_secret": registration_result['client_secret'],
-                        }
-                        if state:
-                            error_params["state"] = state
-
-                        redirect_url = f"{redirect_uri}?{urllib.parse.urlencode(error_params)}"
-                        logger.info(f"🔄 Redirecting to {redirect_uri} with new credentials")
-
-                        return RedirectResponse(url=redirect_url, status_code=302)
-                    except Exception as e:
-                        logger.error(f"❌ Auto-registration failed: {e}")
-                        return JSONResponse(
-                            {"error": "invalid_client", "error_description": f"Client not found and auto-registration failed: {str(e)}"},
-                            status_code=401,
-                        )
+                    # 클라이언트가 없으면 에러 반환 (OAuth 표준 동작)
+                    logger.error(f"❌ Client not found: {client_id}")
+                    return JSONResponse(
+                        {"error": "invalid_client", "error_description": f"Client {client_id} not found. Please register first."},
+                        status_code=401,
+                    )
 
                 # Redirect URI 검증
                 if redirect_uri not in client["dcr_redirect_uris"]:
@@ -1425,12 +1400,12 @@ class UnifiedMCPServer:
             Route("/onenote/.well-known/mcp.json", endpoint=onenote_mcp_discovery_handler, methods=["GET"]),
             Route("/onedrive/.well-known/mcp.json", endpoint=onedrive_mcp_discovery_handler, methods=["GET"]),
             Route("/teams/.well-known/mcp.json", endpoint=teams_mcp_discovery_handler, methods=["GET"]),
-            # Mount MCP servers on specific paths
-            Mount("/mail-query", app=self.mail_query_server.app),
-            Mount("/enrollment", app=self.enrollment_server.app),
-            Mount("/onenote", app=self.onenote_server.app),
-            Mount("/onedrive", app=self.onedrive_server.app),
-            Mount("/teams", app=self.teams_server.app),
+            # Mount MCP servers on specific paths (trailing slash needed to avoid redirects)
+            Mount("/mail-query/", app=self.mail_query_server.app),
+            Mount("/enrollment/", app=self.enrollment_server.app),
+            Mount("/onenote/", app=self.onenote_server.app),
+            Mount("/onedrive/", app=self.onedrive_server.app),
+            Mount("/teams/", app=self.teams_server.app),
         ]
 
         # Create Starlette app
@@ -1439,9 +1414,21 @@ class UnifiedMCPServer:
         # OAuth 인증 미들웨어 적용 (환경변수로 제어)
         enable_oauth = os.getenv("ENABLE_OAUTH_AUTH", "false").lower() == "true"
 
+        # 모든 요청 헤더 로깅 미들웨어 (디버깅용)
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        class HeaderLoggingMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                # Claude.ai에서 오는 요청만 로깅 (user-agent 체크)
+                user_agent = request.headers.get("user-agent", "")
+                if "Claude" in user_agent or "python-httpx" in user_agent:
+                    logger.info(f"🌐 [{request.method}] {request.url.path} - Headers: {dict(request.headers)}")
+                return await call_next(request)
+
+        app.add_middleware(HeaderLoggingMiddleware)
+
         logger.info("=" * 80)
         if enable_oauth:
-            from starlette.middleware.base import BaseHTTPMiddleware
             from modules.dcr_oauth.auth_middleware import verify_bearer_token_middleware
 
             class OAuth2Middleware(BaseHTTPMiddleware):

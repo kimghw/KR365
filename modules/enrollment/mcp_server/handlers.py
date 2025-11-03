@@ -187,18 +187,19 @@ class AuthAccountHandlers:
             ),
         ]
 
-    async def handle_call_tool(self, name: str, arguments: dict) -> List[TextContent]:
+    async def handle_call_tool(self, name: str, arguments: dict, authenticated_user_id: str = None) -> List[TextContent]:
         """
         Handle tool calls
 
         Args:
             name: Tool name
             arguments: Tool arguments
+            authenticated_user_id: User ID from OAuth authentication
 
         Returns:
             List of TextContent with tool results
         """
-        logger.info(f"🔐 [Auth/Account Handler] Handling tool: {name}")
+        logger.info(f"🔐 [Auth/Account Handler] Handling tool: {name} (user: {authenticated_user_id})")
 
         try:
             if name == "register_account":
@@ -214,7 +215,7 @@ class AuthAccountHandlers:
                 return [TextContent(type="text", text=result)]
 
             elif name == "list_active_accounts":
-                result = await self._list_active_accounts()
+                result = await self._list_active_accounts(authenticated_user_id)
                 return [TextContent(type="text", text=result)]
 
             else:
@@ -714,24 +715,39 @@ start_authentication 도구로 OAuth 인증을 진행하세요."""
             # 폴백 3: 인증 시작 실패 → 상세 진단 정보 반환
             return self._format_auth_failure_diagnosis(user_id, str(e))
 
-    async def _list_active_accounts(self) -> str:
+    async def _list_active_accounts(self, authenticated_user_id: str = None) -> str:
         """
-        List all active accounts
+        List active accounts (filtered by authenticated user)
+
+        Args:
+            authenticated_user_id: User ID from OAuth authentication
 
         Returns:
             Formatted list of active accounts
         """
         try:
-            query = """
-                SELECT user_id, user_name, email, status,
-                       oauth_tenant_id, oauth_client_id,
-                       token_expiry, created_at
-                FROM accounts
-                WHERE is_active = 1
-                ORDER BY user_id
-            """
-
-            accounts = self.db.fetch_all(query)
+            # Only show accounts for the authenticated user
+            if authenticated_user_id:
+                query = """
+                    SELECT user_id, user_name, email, status,
+                           oauth_tenant_id, oauth_client_id,
+                           token_expiry, created_at
+                    FROM accounts
+                    WHERE is_active = 1 AND user_id = ?
+                    ORDER BY user_id
+                """
+                accounts = self.db.fetch_all(query, (authenticated_user_id,))
+            else:
+                # Fallback: show all active accounts (backward compatibility)
+                query = """
+                    SELECT user_id, user_name, email, status,
+                           oauth_tenant_id, oauth_client_id,
+                           token_expiry, created_at
+                    FROM accounts
+                    WHERE is_active = 1
+                    ORDER BY user_id
+                """
+                accounts = self.db.fetch_all(query)
 
             if not accounts:
                 return "활성화된 계정이 없습니다."

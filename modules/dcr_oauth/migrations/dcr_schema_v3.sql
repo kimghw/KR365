@@ -39,16 +39,20 @@ CREATE TABLE IF NOT EXISTS dcr_clients (
     azure_application_id TEXT NOT NULL,   -- 어느 Azure 앱을 사용하는지
     azure_object_id TEXT,                 -- 어느 사용자가 등록했는지 (NULL = 로그인 전)
     user_email TEXT,                      -- 사용자 이메일 (참고용)
+    mcp_session_id TEXT,                  -- MCP 세션 ID (ChatGPT 등에서 전송)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (azure_application_id) REFERENCES dcr_azure_app(application_id),
     FOREIGN KEY (azure_object_id) REFERENCES dcr_azure_users(object_id) ON DELETE SET NULL
 );
 
--- 플랫폼 + 사용자별 유니크 제약 (같은 사용자가 같은 플랫폼에 중복 등록 방지)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_dcr_clients_platform_user
-ON dcr_clients(azure_application_id, json_extract(dcr_redirect_uris, '$[0]'), azure_object_id)
-WHERE azure_object_id IS NOT NULL;
+-- UNIQUE INDEX 제거: 같은 사용자가 여러 모듈에서 독립적으로 클라이언트 등록 가능하도록 허용
+-- CREATE UNIQUE INDEX IF NOT EXISTS idx_dcr_clients_platform_user
+-- ON dcr_clients(azure_application_id, json_extract(dcr_redirect_uris, '$[0]'), azure_object_id)
+-- WHERE azure_object_id IS NOT NULL;
+
+-- MCP 세션 ID 인덱스 (같은 세션에서 클라이언트 재사용)
+CREATE INDEX IF NOT EXISTS idx_dcr_clients_session ON dcr_clients(mcp_session_id) WHERE mcp_session_id IS NOT NULL;
 
 -- 4) DCR 토큰 (DCR 서버가 발급한 토큰)
 CREATE TABLE IF NOT EXISTS dcr_tokens (
