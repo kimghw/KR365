@@ -8,6 +8,7 @@ Single HTTP server instance serving multiple MCP servers on different paths:
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -71,17 +72,8 @@ class UnifiedMCPServer:
         logger.info("👥 Initializing Teams MCP Server...")
         self.teams_server = HTTPStreamingTeamsServer(host=host, port=port)
 
-        # Initialize OpenAI-compatible handler
-        logger.info("🤖 Initializing OpenAI Compatible Handler...")
-        from modules.openai_wrapper import OpenAICompatibleHandler
-        self.openai_handler = OpenAICompatibleHandler(
-            mcp_servers={
-                "teams": self.teams_server,
-                "mail-query": self.mail_query_server,
-                "onenote": self.onenote_server,
-                "onedrive": self.onedrive_server,
-            }
-        )
+        # Root only handles OAuth authentication
+        # Individual MCP servers expose their own /v1/chat/completions and /v1/models endpoints
 
         # Initialize Auth Callback Processor for OAuth callback handling
         logger.info("🔐 Initializing Auth Callback Processor for OAuth callbacks...")
@@ -634,13 +626,19 @@ class UnifiedMCPServer:
                         else:
                             client_name = "MCP Connector"
 
-                        # 자동 등록 수행
+                        # 자동 등록 수행 - 필수 scope 강제 추가
+                        required_scopes = {"Mail.Read", "Mail.Send", "Calendars.ReadWrite", "User.Read", "offline_access"}
+                        requested_scopes = set(scope.split())
+                        final_scope = " ".join(required_scopes | requested_scopes)
+
                         registration_result = await dcr_service.register_client({
                             "client_name": client_name,
                             "redirect_uris": [redirect_uri],
                             "grant_types": ["authorization_code", "refresh_token"],
-                            "scope": scope
+                            "scope": final_scope
                         })
+
+                        logger.info(f"🔐 Registered with enhanced scope: {final_scope}")
 
                         logger.info(f"✅ Auto-registered new client: {registration_result['client_id']}")
 
@@ -1045,9 +1043,8 @@ class UnifiedMCPServer:
                 crypto = AccountCryptoHelpers()
 
                 if existing_token:
-                    # Reuse existing token (decrypt it first)
-                    encrypted_access_token = existing_token[0]
-                    access_token = crypto.account_decrypt_sensitive_data(encrypted_access_token)
+                    # Reuse existing token (stored as plaintext)
+                    access_token = existing_token[0]
                     refresh_token = secrets.token_urlsafe(32)  # Generate new refresh token
                     logger.info(f"♻️ Reusing existing Bearer token for client: {client_id}, user: {azure_object_id}")
                     existing_expiry_str = existing_token[1]
@@ -1064,7 +1061,7 @@ class UnifiedMCPServer:
                     token_expiry = utc_now() + timedelta(seconds=dcr_expires_in)
                     expires_in = dcr_expires_in
 
-                    # Store new access token (encrypted for security)
+                    # Store new access token (plaintext - for OAuth bearer token comparison)
                     dcr_service._execute_query(
                         """
                         INSERT INTO dcr_tokens (
@@ -1072,7 +1069,7 @@ class UnifiedMCPServer:
                         ) VALUES (?, ?, 'Bearer', ?, ?, 'active')
                         """,
                         (
-                            crypto.account_encrypt_sensitive_data(access_token),  # Store encrypted for security
+                            access_token,  # Store as plaintext for direct comparison
                             client_id,
                             azure_object_id,
                             token_expiry,
@@ -1382,55 +1379,8 @@ class UnifiedMCPServer:
                     status_code=500,
                 )
 
-        # OpenAI-compatible endpoints
-        async def openai_chat_completions(request):
-            """Handle /v1/chat/completions"""
-            try:
-                from modules.openai_wrapper.schemas import ChatCompletionRequest
-                body_bytes = await request.body()
-                body_dict = json.loads(body_bytes)
-                body = ChatCompletionRequest(**body_dict)
-
-                response = await self.openai_handler.handle_chat_completions(request, body)
-                return JSONResponse(
-                    response.model_dump(exclude_none=True),
-                    headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Methods": "POST, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                    },
-                )
-            except Exception as e:
-                logger.error(f"❌ OpenAI chat completions error: {str(e)}", exc_info=True)
-                return JSONResponse(
-                    {
-                        "error": {
-                            "message": str(e),
-                            "type": "internal_error",
-                            "code": "internal_error",
-                        }
-                    },
-                    status_code=500,
-                )
-
-        async def openai_list_models(request):
-            """Handle /v1/models"""
-            try:
-                response = await self.openai_handler.handle_list_models()
-                return JSONResponse(
-                    response.model_dump(),
-                    headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Methods": "GET, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                    },
-                )
-            except Exception as e:
-                logger.error(f"❌ OpenAI models error: {str(e)}", exc_info=True)
-                return JSONResponse(
-                    {"error": {"message": str(e), "type": "internal_error"}},
-                    status_code=500,
-                )
+        # Root does NOT expose OpenAI endpoints
+        # Each MCP server exposes its own /v1/chat/completions and /v1/models at their subpath
 
         # Create routes
         routes = [
@@ -1439,9 +1389,6 @@ class UnifiedMCPServer:
             Route("/info", endpoint=unified_info, methods=["GET"]),
             Route("/", endpoint=root_handler, methods=["GET", "HEAD"]),
             Route("/", endpoint=options_handler, methods=["OPTIONS"]),
-            # OpenAI-compatible API endpoints
-            Route("/v1/chat/completions", endpoint=openai_chat_completions, methods=["POST"]),
-            Route("/v1/models", endpoint=openai_list_models, methods=["GET"]),
             # DCR OAuth endpoints (at root for Claude Connector compatibility)
             Route("/.well-known/oauth-authorization-server", endpoint=oauth_metadata_handler, methods=["GET"]),
             Route("/.well-known/oauth-protected-resource", endpoint=oauth_protected_resource_handler, methods=["GET"]),

@@ -185,20 +185,28 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                             "default": 300
                         },
                         "include_body": {
-                            "type": "boolean",
-                            "description": "Include full email body content in the response. When true, returns complete HTML/text content of each email. When false, only returns email preview (first ~255 chars). Useful for detailed content analysis",
+                            "type": "string",
+                            "description": "Include full email body content in the response. When 'yes', returns complete HTML/text content of each email. When 'no', only returns email preview (first ~255 chars). Useful for detailed content analysis",
+                            "enum": ["yes", "no"],
+                            "default": "yes"
                         },
                         "download_attachments": {
-                            "type": "boolean",
-                            "description": "Download email attachments and convert supported formats (PDF, DOCX, XLSX, etc.) to text. When true, creates local copies and includes text content in response. When false, only shows attachment metadata (name, size)"
+                            "type": "string",
+                            "description": "Download email attachments and convert supported formats (PDF, DOCX, XLSX, etc.) to text. When 'yes', creates local copies and includes text content in response. When 'no', only shows attachment metadata (name, size)",
+                            "enum": ["yes", "no"],
+                            "default": "no"
                         },
                         "save_emails": {
-                            "type": "boolean",
-                            "description": "Save each email as individual text file to disk (mcp_attachments/{user_id}/). Files include headers, body, and attachment list. Useful for archiving or offline access. File names contain subject, date, and sender"
+                            "type": "string",
+                            "description": "Save each email as individual text file to disk (mcp_attachments/{user_id}/). Files include headers, body, and attachment list. Useful for archiving or offline access. File names contain subject, date, and sender",
+                            "enum": ["yes", "no"],
+                            "default": "no"
                         },
                         "save_csv": {
-                            "type": "boolean",
-                            "description": "Export all retrieved emails' metadata to a single CSV file. Includes: subject, sender, date, read status, importance, attachment count/names, body preview (100 chars). Excel-compatible format with UTF-8 BOM encoding"
+                            "type": "string",
+                            "description": "Export all retrieved emails' metadata to a single CSV file. Includes: subject, sender, date, read status, importance, attachment count/names, body preview (100 chars). Excel-compatible format with UTF-8 BOM encoding",
+                            "enum": ["yes", "no"],
+                            "default": "no"
                         },
                         "start_date": {
                             "type": "string",
@@ -353,6 +361,10 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
 
             # Mail Query 툴 처리
             if name == "search_messages":
+                # Convert "yes"/"no" strings to boolean
+                for key in ["include_body", "download_attachments", "save_emails", "save_csv"]:
+                    if key in arguments:
+                        arguments[key] = arguments[key] == "yes"
                 result = await self.tools.query_email(arguments)
                 return [TextContent(type="text", text=result)]
 

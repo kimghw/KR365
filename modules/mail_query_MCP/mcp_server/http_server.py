@@ -1264,6 +1264,40 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
         # (this ensures FastAPI routes take precedence)
         fastapi_app.mount("/mcp", self.starlette_app)
 
+        # Initialize OpenAI wrapper
+        from modules.openai_wrapper import MCPOpenAIWrapper
+        self.openai_wrapper = MCPOpenAIWrapper(
+            mcp_server=self,
+            server_name="mail-query",
+            model_id="mcp-mail-query"
+        )
+
+        # OpenAI-compatible endpoints
+        @fastapi_app.post(
+            "/v1/chat/completions",
+            tags=["OpenAI Compatible"],
+            summary="Chat Completions",
+            description="OpenAI-compatible chat completions endpoint exposing MCP tools"
+        )
+        async def chat_completions(request: FastAPIRequest):
+            """Handle OpenAI chat completions request"""
+            from modules.openai_wrapper.schemas import ChatCompletionRequest
+            body = await request.json()
+            chat_request = ChatCompletionRequest(**body)
+            response = await self.openai_wrapper.handle_chat_completions(chat_request)
+            return response.model_dump(exclude_none=True)
+
+        @fastapi_app.get(
+            "/v1/models",
+            tags=["OpenAI Compatible"],
+            summary="List Models",
+            description="List available models (MCP server as a model)"
+        )
+        async def list_models():
+            """Handle OpenAI list models request"""
+            response = await self.openai_wrapper.handle_list_models()
+            return response.model_dump()
+
         logger.info("📚 FastAPI wrapper created - OpenAPI available at /docs")
         return fastapi_app
 

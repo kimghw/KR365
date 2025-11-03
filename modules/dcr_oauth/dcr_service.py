@@ -102,7 +102,7 @@ class DCRService:
         client_name = request_data.get("client_name", "MCP Connector")
         redirect_uris = request_data.get("redirect_uris", [])
         grant_types = request_data.get("grant_types", ["authorization_code", "refresh_token"])
-        scope = request_data.get("scope", "Mail.Read User.Read")
+        scope = request_data.get("scope", "Mail.Read Mail.Send Calendars.ReadWrite User.Read")
 
         # redirect_uri가 없으면 에러
         if not redirect_uris:
@@ -490,7 +490,11 @@ class DCRService:
             )
 
     def verify_bearer_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """DCR Bearer 토큰 검증 (Azure 토큰 조회 없음)"""
+        """DCR Bearer 토큰 검증
+
+        Note: dcr_token_value는 암호화되지 않은 원본 토큰 값이 저장됨
+        클라이언트가 보낸 Bearer 토큰과 직접 비교
+        """
         query = """
         SELECT dcr_client_id, dcr_token_value, azure_object_id
         FROM dcr_tokens
@@ -501,24 +505,31 @@ class DCRService:
 
         results = self._fetch_all(query)
 
+        logger.info(f"🔍 [verify_bearer_token] Found {len(results) if results else 0} active tokens in DB")
+
         if not results:
+            logger.warning(f"⚠️ [verify_bearer_token] No active Bearer tokens found in DB")
             return None
 
-        for row in results:
-            dcr_client_id, encrypted_dcr_token, azure_object_id = row
+        for i, row in enumerate(results):
+            dcr_client_id, stored_token, azure_object_id = row
+            logger.info(f"🔍 [verify_bearer_token] Checking token {i+1}/{len(results)} for client: {dcr_client_id}")
 
             try:
-                # DCR 토큰 복호화 후 비교
-                decrypted_dcr_token = self.crypto.account_decrypt_sensitive_data(encrypted_dcr_token)
-                if secrets.compare_digest(decrypted_dcr_token, token):
+                # DB의 토큰과 직접 비교 (암호화 불필요 - 이미 원본 토큰이 저장됨)
+                if secrets.compare_digest(stored_token, token):
+                    logger.info(f"✅ [verify_bearer_token] Token matched for client: {dcr_client_id}")
                     return {
                         "dcr_client_id": dcr_client_id,
                         "azure_object_id": azure_object_id,
                     }
+                else:
+                    logger.info(f"❌ [verify_bearer_token] Token did NOT match for client: {dcr_client_id}")
             except Exception as e:
-                logger.error(f"Token decryption error: {e}")
+                logger.error(f"❌ [verify_bearer_token] Token comparison error for client {dcr_client_id}: {e}", exc_info=True)
                 continue
 
+        logger.warning(f"⚠️ [verify_bearer_token] No matching token found after checking all {len(results)} tokens")
         return None
 
     def get_azure_tokens_by_object_id(self, azure_object_id: str) -> Optional[Dict[str, Any]]:
