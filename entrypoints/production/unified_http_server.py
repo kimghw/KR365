@@ -1018,8 +1018,9 @@ class UnifiedMCPServer:
                 crypto = AccountCryptoHelpers()
 
                 if existing_token:
-                    # Reuse existing token (stored as plaintext)
-                    access_token = existing_token[0]
+                    # Reuse existing token (decrypt from DB)
+                    encrypted_access_token = existing_token[0]
+                    access_token = crypto.account_decrypt_sensitive_data(encrypted_access_token)
                     refresh_token = secrets.token_urlsafe(32)  # Generate new refresh token
                     logger.info(f"♻️ Reusing existing Bearer token for client: {client_id}, user: {azure_object_id}")
                     existing_expiry_str = existing_token[1]
@@ -1036,7 +1037,8 @@ class UnifiedMCPServer:
                     token_expiry = utc_now() + timedelta(seconds=dcr_expires_in)
                     expires_in = dcr_expires_in
 
-                    # Store new access token (plaintext - for OAuth bearer token comparison)
+                    # Store new access token (암호화 - 보안)
+                    encrypted_access_token = dcr_service.crypto.account_encrypt_sensitive_data(access_token)
                     dcr_service._execute_query(
                         """
                         INSERT INTO dcr_tokens (
@@ -1044,13 +1046,13 @@ class UnifiedMCPServer:
                         ) VALUES (?, ?, 'Bearer', ?, ?, 'active')
                         """,
                         (
-                            access_token,  # Store as plaintext for direct comparison
+                            encrypted_access_token,  # 암호화된 토큰 저장
                             client_id,
                             azure_object_id,
                             token_expiry,
                         ),
                     )
-                    logger.info(f"✨ Created new Bearer token for client: {client_id}, user: {azure_object_id}")
+                    logger.info(f"✨ Created new Bearer token (encrypted) for client: {client_id}, user: {azure_object_id}")
 
                 # Delete existing refresh token for this client + object_id + token_type (prevent duplicates)
                 dcr_service._execute_query(
