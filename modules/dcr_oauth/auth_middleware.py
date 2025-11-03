@@ -17,7 +17,7 @@ def get_user_id_from_azure_object_id(azure_object_id: str) -> Optional[str]:
     Azure Object ID로부터 user_id를 조회합니다.
 
     조회 경로:
-    azure_object_id → dcr_azure_tokens.user_email → accounts.user_id
+    azure_object_id → dcr_azure_users.user_email → accounts.user_id
 
     Args:
         azure_object_id: Azure User Object ID
@@ -31,7 +31,7 @@ def get_user_id_from_azure_object_id(azure_object_id: str) -> Optional[str]:
         dcr_db = get_dcr_database_manager()
 
         email_result = dcr_db.execute_query(
-            "SELECT user_email FROM dcr_azure_tokens WHERE object_id = ?",
+            "SELECT user_email FROM dcr_azure_users WHERE object_id = ?",
             (azure_object_id,),
             fetch_result=True
         )

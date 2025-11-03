@@ -60,13 +60,13 @@ def save_azure_config_to_db(service) -> None:
         return
     try:
         existing = service._fetch_one(
-            "SELECT application_id FROM dcr_azure_auth WHERE application_id = ?",
+            "SELECT application_id FROM dcr_azure_app WHERE application_id = ?",
             (service.azure_application_id,),
         )
         if existing:
             service._execute_query(
                 """
-                UPDATE dcr_azure_auth
+                UPDATE dcr_azure_app
                 SET client_secret = ?, tenant_id = ?, redirect_uri = ?
                 WHERE application_id = ?
                 """,
@@ -77,11 +77,11 @@ def save_azure_config_to_db(service) -> None:
                     service.azure_application_id,
                 ),
             )
-            logger.info(f"✅ Updated Azure config in dcr_azure_auth: {service.azure_application_id}")
+            logger.info(f"✅ Updated Azure config in dcr_azure_app: {service.azure_application_id}")
         else:
             service._execute_query(
                 """
-                INSERT INTO dcr_azure_auth (application_id, client_secret, tenant_id, redirect_uri)
+                INSERT INTO dcr_azure_app (application_id, client_secret, tenant_id, redirect_uri)
                 VALUES (?, ?, ?, ?)
                 """,
                 (
@@ -91,7 +91,7 @@ def save_azure_config_to_db(service) -> None:
                     service.azure_redirect_uri,
                 ),
             )
-            logger.info(f"✅ Saved Azure config to dcr_azure_auth: {service.azure_application_id}")
+            logger.info(f"✅ Saved Azure config to dcr_azure_app: {service.azure_application_id}")
     except Exception as e:
         logger.error(f"❌ Failed to save Azure config to DB: {e}")
 
@@ -100,13 +100,13 @@ def load_azure_config(service) -> None:
     """Load Azure config from DB or environment and keep DB in sync.
 
     Priority:
-    1) dcr_azure_auth table; if env overrides present (client_id and secret), update
+    1) dcr_azure_app table; if env overrides present (client_id and secret), update
        DB and revoke active tokens.
     2) Environment variables, then persist to DB if complete.
     """
     # 1) Load from DB first
     result = service._fetch_one(
-        "SELECT application_id, client_secret, tenant_id, redirect_uri FROM dcr_azure_auth LIMIT 1"
+        "SELECT application_id, client_secret, tenant_id, redirect_uri FROM dcr_azure_app LIMIT 1"
     )
 
     env_app_id = os.getenv("DCR_AZURE_CLIENT_ID")
@@ -155,7 +155,7 @@ def load_azure_config(service) -> None:
                         set_clauses.append("redirect_uri = ?")
                         params.append(env_redirect)
 
-                    update_sql = f"UPDATE dcr_azure_auth SET {', '.join(set_clauses)} WHERE application_id = ?"
+                    update_sql = f"UPDATE dcr_azure_app SET {', '.join(set_clauses)} WHERE application_id = ?"
                     params.append(current_app_id)
                     service._execute_query(update_sql, tuple(params))
 
@@ -167,14 +167,14 @@ def load_azure_config(service) -> None:
 
                     revoke_active_dcr_tokens_on_config_change(service)
                     logger.info(
-                        f"♻️ Updated dcr_azure_auth from environment and revoked active DCR tokens (changed: {', '.join(changes)})"
+                        f"♻️ Updated dcr_azure_app from environment and revoked active DCR tokens (changed: {', '.join(changes)})"
                     )
                 except Exception as e:
-                    logger.error(f"❌ Failed to update dcr_azure_auth from environment: {e}")
+                    logger.error(f"❌ Failed to update dcr_azure_app from environment: {e}")
             else:
-                logger.info(f"✅ Loaded Azure config from dcr_azure_auth: {service.azure_application_id}")
+                logger.info(f"✅ Loaded Azure config from dcr_azure_app: {service.azure_application_id}")
         else:
-            logger.info(f"✅ Loaded Azure config from dcr_azure_auth: {service.azure_application_id}")
+            logger.info(f"✅ Loaded Azure config from dcr_azure_app: {service.azure_application_id}")
     else:
         # 2) Fallback to environment and persist if complete
         service.azure_application_id = env_app_id

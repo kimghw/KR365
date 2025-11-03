@@ -31,8 +31,8 @@ class DCRService:
     Dynamic Client Registration Service V3
 
     테이블 구조:
-    - dcr_azure_auth: Azure 앱 인증 정보 (Portal에서 생성)
-    - dcr_azure_tokens: Azure 사용자 토큰 (Azure AD에서 받음)
+    - dcr_azure_app: Azure 앱 정보 (Portal에서 생성)
+    - dcr_azure_users: Azure 사용자별 토큰 (Azure AD에서 받음)
     - dcr_clients: Claude 클라이언트 등록 (DCR이 생성)
     - dcr_tokens: Claude 토큰 (DCR이 발급)
     """
@@ -78,7 +78,7 @@ class DCRService:
         return db_utils.fetch_all(self.db_path, query, params)
 
     def _load_azure_config(self):
-        """dcr_azure_auth 테이블 또는 환경변수에서 Azure 설정 로드 (위임)"""
+        """dcr_azure_app 테이블 또는 환경변수에서 Azure 설정 로드 (위임)"""
         _load_azure_config_helper(self)
 
     def _revoke_active_dcr_tokens_on_config_change(self):
@@ -186,7 +186,7 @@ class DCRService:
         azure_expires_at: datetime,
         sync_accounts: bool = True,
     ) -> None:
-        """Persist Azure tokens to dcr_azure_tokens and sync to accounts table.
+        """Persist Azure tokens to dcr_azure_users and sync to accounts table.
 
         This centralizes the path for saving Azure tokens so any caller
         (e.g., OAuth callback) can ensure graphapi accounts are updated.
@@ -194,9 +194,9 @@ class DCRService:
         if not azure_object_id:
             raise ValueError("azure_object_id is required")
 
-        # Store in dcr_azure_tokens (encrypted)
+        # Store in dcr_azure_users (encrypted)
         azure_query = """
-            INSERT OR REPLACE INTO dcr_azure_tokens (
+            INSERT OR REPLACE INTO dcr_azure_users (
                 object_id, application_id, access_token, refresh_token, expires_at,
                 scope, user_email, user_name, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -394,10 +394,10 @@ class DCRService:
         """DCR 토큰 + Azure 토큰 저장 + accounts 테이블 연동"""
         dcr_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
-        # 1) dcr_azure_tokens에 Azure 토큰 저장
+        # 1) dcr_azure_users에 Azure 토큰 저장
         if azure_object_id:
             azure_query = """
-            INSERT OR REPLACE INTO dcr_azure_tokens (
+            INSERT OR REPLACE INTO dcr_azure_users (
                 object_id, application_id, access_token, refresh_token, expires_at,
                 scope, user_email, user_name, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -536,7 +536,7 @@ class DCRService:
         """Azure Object ID로 Azure 토큰 조회"""
         query = """
         SELECT access_token, refresh_token, scope, expires_at, user_email
-        FROM dcr_azure_tokens
+        FROM dcr_azure_users
         WHERE object_id = ?
         """
 
@@ -627,7 +627,7 @@ class DCRService:
 
                 # DCR 테이블에서 실제 사용자의 scope 가져오기
                 azure_token = self._fetch_one(
-                    "SELECT scope FROM dcr_azure_tokens WHERE object_id = ?",
+                    "SELECT scope FROM dcr_azure_users WHERE object_id = ?",
                     (azure_object_id,)
                 )
 

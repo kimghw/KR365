@@ -112,7 +112,7 @@ class Config:
         """DCR 전용 SQLite 데이터베이스 파일 경로"""
         path = os.getenv("DCR_DATABASE_PATH")
         if not path:
-            default_path = "./data/claudedcr.db"
+            default_path = "./data/dcr.db"
             logger.info(f"DCR_DATABASE_PATH 미설정. 기본값 사용: {default_path}")
             path = default_path
         # 디렉터리가 없으면 생성
