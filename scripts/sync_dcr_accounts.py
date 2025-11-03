@@ -13,40 +13,42 @@ from datetime import datetime, timezone
 from modules.enrollment.account import AccountCryptoHelpers
 from infra.core.database import get_database_manager
 from infra.core.logger import get_logger
+from infra.core.config import get_config
 
 logger = get_logger(__name__)
 
 def sync_dcr_accounts():
-    """claudedcr.db의 Azure 토큰을 graphapi.db의 accounts 테이블로 동기화"""
+    """dcr.db의 Azure 토큰을 graphapi.db의 accounts 테이블로 동기화"""
 
     crypto = AccountCryptoHelpers()
     db_manager = get_database_manager()
+    config = get_config()
 
-    # claudedcr.db에서 Azure 토큰 조회
-    dcr_conn = sqlite3.connect('./data/claudedcr.db')
+    # dcr.db에서 Azure 토큰 조회
+    dcr_conn = sqlite3.connect(config.dcr_database_path)
     dcr_conn.row_factory = sqlite3.Row
     dcr_cursor = dcr_conn.cursor()
 
     dcr_cursor.execute('''
         SELECT
-            dat.object_id,
-            dat.user_email,
-            dat.user_name,
-            dat.access_token,
-            dat.refresh_token,
-            dat.expires_at,
-            dat.scope,
+            dau.object_id,
+            dau.user_email,
+            dau.user_name,
+            dau.access_token,
+            dau.refresh_token,
+            dau.expires_at,
+            dau.scope,
             daa.application_id,
             daa.tenant_id,
             daa.redirect_uri,
             daa.client_secret
-        FROM dcr_azure_tokens dat
-        JOIN dcr_azure_auth daa ON dat.application_id = daa.application_id
-        WHERE dat.user_email IS NOT NULL
+        FROM dcr_azure_users dau
+        JOIN dcr_azure_app daa ON dau.application_id = daa.application_id
+        WHERE dau.user_email IS NOT NULL
     ''')
 
     azure_tokens = dcr_cursor.fetchall()
-    logger.info(f"📋 Found {len(azure_tokens)} accounts in claudedcr.db")
+    logger.info(f"📋 Found {len(azure_tokens)} accounts in dcr.db")
 
     for token in azure_tokens:
         user_email = token['user_email']

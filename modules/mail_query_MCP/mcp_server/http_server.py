@@ -36,7 +36,7 @@ class HTTPStreamingMailAttachmentServer:
         self.port = port
 
         # MCP Server
-        self.mcp_server = Server("mail-attachment-server")
+        self.mcp_server = Server("email-mcp-server")
 
         # Database
         self.db = get_database_manager()
@@ -237,8 +237,8 @@ class HTTPStreamingMailAttachmentServer:
                     # Use fixed capabilities (with logging as empty object)
                     "capabilities": caps_dict,
                     "serverInfo": {
-                        "name": "mail-attachment-server",
-                        "title": "📧 Mail Attachment Server",
+                        "name": "email-mcp-server",
+                        "title": "📧 Email MCP Server",
                         "version": "2.0.0",
                         "description": "MCP server for email attachment handling",
                     },
@@ -415,7 +415,7 @@ class HTTPStreamingMailAttachmentServer:
             return JSONResponse(
                 {
                     "status": "healthy",
-                    "server": "mail-attachment-server",
+                    "server": "email-mcp-server",
                     "version": "2.0.0",
                     "transport": "http-streaming",
                 },
@@ -431,7 +431,7 @@ class HTTPStreamingMailAttachmentServer:
             """Server information endpoint"""
             return JSONResponse(
                 {
-                    "name": "mail-attachment-server",
+                    "name": "email-mcp-server",
                     "version": "2.0.0",
                     "protocol": "mcp",
                     "transport": "http-streaming",
@@ -466,7 +466,7 @@ class HTTPStreamingMailAttachmentServer:
                 # For GET/HEAD requests, return server info
                 return JSONResponse(
                     {
-                        "name": "mail-attachment-server",
+                        "name": "email-mcp-server",
                         "version": "2.0.0",
                         "protocol": "mcp",
                         "transport": "http",
@@ -1242,7 +1242,7 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
             description="Check if the server is running and healthy"
         )
         async def health_check():
-            return {"status": "healthy", "server": "mail-query-mcp"}
+            return {"status": "healthy", "server": "email-mcp-server"}
 
         @fastapi_app.get(
             "/info",
@@ -1252,7 +1252,7 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
         )
         async def server_info():
             return {
-                "name": "mail-query-mcp-server",
+                "name": "email-mcp-server",
                 "version": "2.0.0",
                 "protocol": "mcp",
                 "transport": "http",

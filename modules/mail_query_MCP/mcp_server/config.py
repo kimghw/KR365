@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+
 from infra.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +32,7 @@ class Config:
 
         try:
             # Load main config
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config_str = f.read()
             self._config = json.loads(config_str)
 
@@ -39,7 +40,7 @@ class Config:
             user_config_path = config_path.parent / "config.user.json"
             if user_config_path.exists():
                 try:
-                    with open(user_config_path, 'r', encoding='utf-8') as f:
+                    with open(user_config_path, "r", encoding="utf-8") as f:
                         self._user_config = json.load(f)
                     logger.info(f"Loaded user config from {user_config_path}")
                 except Exception as e:
@@ -59,11 +60,15 @@ class Config:
             self._merge_configs(self._config, self._user_config)
 
         # Process environment variables in paths
-        if 'paths' in self._config:
-            paths = self._config['paths']
+        if "paths" in self._config:
+            paths = self._config["paths"]
             for key, value in paths.items():
                 # Skip metadata keys (starting with _ or named 'comment')
-                if key.startswith('_') or key in ['comment', 'create_if_not_exists', 'use_absolute_paths']:
+                if key.startswith("_") or key in [
+                    "comment",
+                    "create_if_not_exists",
+                    "use_absolute_paths",
+                ]:
                     continue
 
                 if isinstance(value, str):
@@ -72,7 +77,9 @@ class Config:
                     paths[key] = value
 
                     # Create directories if needed (except for log files)
-                    if paths.get('create_if_not_exists', True) and not key.endswith('_file'):
+                    if paths.get("create_if_not_exists", True) and not key.endswith(
+                        "_file"
+                    ):
                         path = Path(value)
                         if not path.suffix:  # It's a directory, not a file
                             path.mkdir(parents=True, exist_ok=True)
@@ -87,9 +94,9 @@ class Config:
             return os.environ.get(var_name, match.group(0))
 
         # Handle ${VAR} format
-        path_str = re.sub(r'\$\{([^}]+)\}', replace_var, path_str)
+        path_str = re.sub(r"\$\{([^}]+)\}", replace_var, path_str)
         # Handle $VAR format
-        path_str = re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)', replace_var, path_str)
+        path_str = re.sub(r"\$([A-Za-z_][A-Za-z0-9_]*)", replace_var, path_str)
 
         # Expand user home directory
         path_str = os.path.expanduser(path_str)
@@ -119,7 +126,7 @@ class Config:
 
         return {
             "mcp": {
-                "server_name": "mail-query-without-db-server",
+                "server_name": "email-mcp-server",
                 "command": "python",
                 "args": ["-m", "modules.mail_query_without_db.mcp_server.http_server"],
             },
@@ -131,56 +138,69 @@ class Config:
                 "temp_dir": str(base_dir / "temp"),
                 "log_file": str(base_dir / "logs" / "mcp_mail_server.log"),
                 "use_absolute_paths": True,
-                "create_if_not_exists": True
+                "create_if_not_exists": True,
             },
-            "server": {
-                "default_host": "0.0.0.0",
-                "default_port": 8002
-            },
+            "server": {"default_host": "0.0.0.0", "default_port": 8002},
             "email": {
                 "blocked_senders": [],
                 "default_days_back": 30,
                 "default_max_mails": 300,
-                "csv_encoding": "utf-8-sig"
+                "csv_encoding": "utf-8-sig",
             },
             "file_handling": {
                 "max_preview_length": 3000,
                 "max_filename_length": 200,
                 "max_file_size_mb": 50,
-                "cleanup_after_query": True
-            }
+                "cleanup_after_query": True,
+            },
         }
 
     # Path properties
     @property
     def base_dir(self) -> Path:
         """Get base directory path"""
-        return Path(self._config.get('paths', {}).get('base_dir', Path.home() / "mcp_data"))
+        return Path(
+            self._config.get("paths", {}).get("base_dir", Path.home() / "mcp_data")
+        )
 
     @property
     def attachments_dir(self) -> Path:
         """Get attachments directory path"""
-        return Path(self._config.get('paths', {}).get('attachments_dir', self.base_dir / "attachments"))
+        return Path(
+            self._config.get("paths", {}).get(
+                "attachments_dir", self.base_dir / "attachments"
+            )
+        )
 
     @property
     def emails_dir(self) -> Path:
         """Get emails directory path"""
-        return Path(self._config.get('paths', {}).get('emails_dir', self.base_dir / "emails"))
+        return Path(
+            self._config.get("paths", {}).get("emails_dir", self.base_dir / "emails")
+        )
 
     @property
     def exports_dir(self) -> Path:
         """Get exports directory path"""
-        return Path(self._config.get('paths', {}).get('exports_dir', self.base_dir / "exports"))
+        return Path(
+            self._config.get("paths", {}).get("exports_dir", self.base_dir / "exports")
+        )
 
     @property
     def temp_dir(self) -> Path:
         """Get temp directory path"""
-        return Path(self._config.get('paths', {}).get('temp_dir', self.base_dir / "temp"))
+        return Path(
+            self._config.get("paths", {}).get("temp_dir", self.base_dir / "temp")
+        )
 
     @property
     def log_file(self) -> Path:
         """Get log file path"""
-        return Path(self._config.get('paths', {}).get('log_file', self.base_dir / "logs" / "mcp_mail_server.log"))
+        return Path(
+            self._config.get("paths", {}).get(
+                "log_file", self.base_dir / "logs" / "mcp_mail_server.log"
+            )
+        )
 
     # Backward compatibility - keep existing properties
     @property
@@ -193,54 +213,56 @@ class Config:
     def blocked_senders(self) -> list:
         """Get blocked senders list from environment variable or config"""
         # 1순위: 환경변수 BLOCKED_SENDER_PATTERNS
-        env_blocked = os.getenv('BLOCKED_SENDER_PATTERNS', '').strip()
+        env_blocked = os.getenv("BLOCKED_SENDER_PATTERNS", "").strip()
         if env_blocked:
             # 쉼표로 구분된 패턴을 리스트로 변환
-            return [pattern.strip() for pattern in env_blocked.split(',') if pattern.strip()]
+            return [
+                pattern.strip() for pattern in env_blocked.split(",") if pattern.strip()
+            ]
 
         # 2순위: config.json의 blocked_senders
-        return self._config.get('email', {}).get('blocked_senders', [])
+        return self._config.get("email", {}).get("blocked_senders", [])
 
     @property
     def default_days_back(self) -> int:
         """Get default days back"""
-        return self._config.get('email', {}).get('default_days_back', 30)
+        return self._config.get("email", {}).get("default_days_back", 30)
 
     @property
     def default_max_mails(self) -> int:
         """Get default max mails"""
-        return self._config.get('email', {}).get('default_max_mails', 300)
+        return self._config.get("email", {}).get("default_max_mails", 300)
 
     # File handling configuration
     @property
     def max_file_size_mb(self) -> int:
         """Get max file size in MB"""
-        return self._config.get('file_handling', {}).get('max_file_size_mb', 50)
+        return self._config.get("file_handling", {}).get("max_file_size_mb", 50)
 
     @property
     def max_filename_length(self) -> int:
         """Get max filename length"""
-        return self._config.get('file_handling', {}).get('max_filename_length', 200)
+        return self._config.get("file_handling", {}).get("max_filename_length", 200)
 
     @property
     def cleanup_after_query(self) -> bool:
         """Get cleanup after query flag"""
-        return self._config.get('file_handling', {}).get('cleanup_after_query', True)
+        return self._config.get("file_handling", {}).get("cleanup_after_query", True)
 
     # Server configuration
     @property
     def default_host(self) -> str:
         """Get default host"""
-        return self._config.get('server', {}).get('default_host', '0.0.0.0')
+        return self._config.get("server", {}).get("default_host", "0.0.0.0")
 
     @property
     def default_port(self) -> int:
         """Get default port"""
-        return self._config.get('server', {}).get('default_port', 8002)
+        return self._config.get("server", {}).get("default_port", 8002)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value by key (dot notation supported)"""
-        keys = key.split('.')
+        keys = key.split(".")
         value = self._config
 
         for k in keys:
@@ -259,14 +281,14 @@ class Config:
             "emails_dir": str(self.emails_dir),
             "exports_dir": str(self.exports_dir),
             "temp_dir": str(self.temp_dir),
-            "log_file": str(self.log_file)
+            "log_file": str(self.log_file),
         }
 
     def print_config_info(self):
         """Print current configuration information"""
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("MCP Server Configuration")
-        print("="*60)
+        print("=" * 60)
 
         print("\nPath Settings:")
         for key, value in self.get_path_config().items():
@@ -285,4 +307,4 @@ class Config:
         print("\nServer Settings:")
         print(f"  Default host        : {self.default_host}")
         print(f"  Default port        : {self.default_port}")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")

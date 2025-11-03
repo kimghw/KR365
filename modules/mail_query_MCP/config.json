@@ -1,6 +1,6 @@
 {
   "mcp": {
-    "server_name": "mail-query-without-db-server",
+    "server_name": "email-mcp-server",
     "command": "python",
     "args": ["-m", "modules.mail_query_without_db.mcp_server.server"],
     "env": {

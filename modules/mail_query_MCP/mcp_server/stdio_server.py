@@ -7,8 +7,9 @@ For standalone execution, use: modules/mail_query_MCP/entrypoints/run_stdio.py
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from .handlers import MCPHandlers
 from infra.handlers.attachment_filter_handlers import AttachmentFilterHandlers
+
+from .handlers import MCPHandlers
 
 
 async def run_stdio_server():
@@ -23,7 +24,7 @@ async def run_stdio_server():
         None - runs indefinitely until interrupted
     """
     # Create MCP server
-    server = Server("mail-query-mcp-server")
+    server = Server("email-mcp-server")
 
     # Initialize handlers
     attachment_handlers = AttachmentFilterHandlers()
@@ -49,7 +50,5 @@ async def run_stdio_server():
     # Run the server with STDIO transport
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options()
+            read_stream, write_stream, server.create_initialization_options()
         )
