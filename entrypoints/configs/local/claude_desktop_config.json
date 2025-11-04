@@ -23,6 +23,30 @@
         "/home/kimghw/MailQueryWithMCP/entrypoints/local/run_onenote_stdio.sh"
       ],
       "description": "OneNote MCP Server - OneNote notebooks, sections, and pages management"
+    },
+    "teams-server": {
+      "command": "wsl",
+      "args": [
+        "-e",
+        "/home/kimghw/MailQueryWithMCP/entrypoints/local/run_teams_stdio.sh"
+      ],
+      "description": "Teams MCP Server - Microsoft Teams 1:1 and group chat management"
+    },
+    "onedrive-server": {
+      "command": "wsl",
+      "args": [
+        "-e",
+        "/home/kimghw/MailQueryWithMCP/entrypoints/local/run_onedrive_stdio.sh"
+      ],
+      "description": "OneDrive MCP Server - OneDrive file and folder management"
+    },
+    "calendar-server": {
+      "command": "wsl",
+      "args": [
+        "-e",
+        "/home/kimghw/MailQueryWithMCP/entrypoints/local/run_calendar_stdio.sh"
+      ],
+      "description": "Calendar MCP Server - Calendar events and schedule management"
     }
   }
 }

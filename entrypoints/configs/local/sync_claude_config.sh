@@ -5,7 +5,7 @@
 set -e
 
 # Source and destination paths
-SOURCE="/home/kimghw/IACSGRAPH/entrypoints/configs/local/claude_desktop_config.json"
+SOURCE="/home/kimghw/MailQueryWithMCP/entrypoints/configs/local/claude_desktop_config.json"
 DEST="/mnt/c/Users/GEOHWA KIM/AppData/Roaming/Claude/claude_desktop_config.json"
 
 echo "🔄 Syncing Claude Desktop config..."
