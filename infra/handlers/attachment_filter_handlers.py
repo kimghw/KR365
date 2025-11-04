@@ -83,8 +83,17 @@ class AttachmentFilterHandlers:
                 name="attachmentManager",
                 description="""첨부파일 관리 도구: 특정 기간 동안의 메일을 조회하여 첨부파일명에 키워드가 포함된 파일을 관리합니다.
 
+⭐ 주요 기능:
+- 첨부파일 키워드 검색 및 자동 다운로드
+- OneDrive /emails_llm 폴더에 자동 저장 (실패 시 로컬 저장)
+- 임시 파일 자동 정리 (다운로드 후 삭제)
+
+💡 query_email과의 차이점:
+- query_email: 첨부파일 분석만 가능 (OneDrive 저장 불가)
+- attachmentManager: 첨부파일 OneDrive 저장 + 키워드 검색
+
 환경설정 기본값:
-- 첨부파일 저장: 활성화 (기본 경로: {})
+- 첨부파일 저장: 활성화 (OneDrive /emails_llm 또는 로컬: {})
 - 텍스트 추출 및 LLM 전달: 비활성화 (기본값)
 
 조회 전략 (권장):
@@ -227,6 +236,46 @@ class AttachmentFilterHandlers:
 
         return False
 
+    def _cleanup_empty_temp_folders(self, user_id: str):
+        """
+        임시 폴더에서 빈 폴더 정리
+
+        Args:
+            user_id: 사용자 ID
+        """
+        try:
+            import shutil
+            temp_base = Path("./filtered_attachments") / user_id
+
+            if not temp_base.exists():
+                return
+
+            deleted_folders = 0
+
+            # 하위 폴더들을 역순으로 순회 (자식 폴더부터 삭제)
+            for folder in sorted(temp_base.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                if folder.is_dir():
+                    try:
+                        # 폴더가 비어있으면 삭제
+                        if not any(folder.iterdir()):
+                            folder.rmdir()
+                            deleted_folders += 1
+                            logger.debug(f"빈 폴더 삭제: {folder}")
+                    except Exception as e:
+                        logger.debug(f"폴더 삭제 실패: {folder} - {str(e)}")
+
+            # user_id 폴더도 비어있으면 삭제
+            if temp_base.exists() and not any(temp_base.iterdir()):
+                temp_base.rmdir()
+                deleted_folders += 1
+                logger.info(f"🗑️ 사용자 임시 폴더 삭제: {temp_base}")
+
+            if deleted_folders > 0:
+                logger.info(f"🗑️ 빈 폴더 {deleted_folders}개 정리 완료")
+
+        except Exception as e:
+            logger.warning(f"⚠️ 임시 폴더 정리 중 오류: {str(e)}")
+
     async def _upload_to_onedrive(
         self,
         graph_client,
@@ -255,8 +304,8 @@ class AttachmentFilterHandlers:
 
             # 기본 OneDrive 경로 (공유 폴더 없으면)
             if not target_folder_url:
-                # OneDrive 루트에 저장
-                upload_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{file_path.name}:/content"
+                # OneDrive emails_llm 폴더에 저장
+                upload_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/emails_llm/{file_path.name}:/content"
             else:
                 # SharePoint 공유 링크를 드라이브 아이템으로 변환
                 # URL을 base64url로 인코딩 (padding 없이)
@@ -617,6 +666,14 @@ class AttachmentFilterHandlers:
                                         })
                                         logger.info(f"텍스트 추출 완료: {attachment_name} ({len(extracted_text)} 문자)")
 
+                                # 임시 파일 삭제 (OneDrive 업로드 후 또는 로컬 복사 후)
+                                try:
+                                    if original_path.exists():
+                                        original_path.unlink()
+                                        logger.info(f"🗑️ 임시 파일 삭제: {original_path}")
+                                except Exception as e:
+                                    logger.warning(f"⚠️ 임시 파일 삭제 실패: {original_path} - {str(e)}")
+
                         except Exception as e:
                             logger.error(f"첨부파일 다운로드/저장 실패: {attachment_name} - {str(e)}")
                             continue
@@ -628,7 +685,10 @@ class AttachmentFilterHandlers:
                 if extract_text:
                     logger.info(f"텍스트 추출 완료: {len(extracted_texts)}개")
 
-                # 6. 결과 포맷팅
+                # 6. 임시 폴더 정리 (빈 폴더 삭제)
+                self._cleanup_empty_temp_folders(user_id)
+
+                # 7. 결과 포맷팅
                 result_text = self._format_manager_results(
                     user_id=user_id,
                     start_date=start_date,

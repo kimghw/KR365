@@ -111,7 +111,9 @@ def get_query_email_help() -> str:
 
 📌 조회 옵션:
   • include_body: 이메일 본문 포함 (기본값: true)
-  • download_attachments: 첨부파일 다운로드 및 변환 (기본값: false)
+  • download_attachments: 첨부파일 다운로드 및 텍스트 변환 (기본값: false)
+    ⚠️  주의: 첨부파일은 분석만 가능하며 OneDrive 저장은 불가
+    💡 첨부파일을 OneDrive에 저장하려면 attachmentManager 도구 사용
   • save_emails: 메일을 텍스트 파일로 저장 (기본값: true)
   • save_csv: 메타데이터를 CSV로 내보내기 (기본값: false)
 
@@ -604,7 +606,7 @@ start_authentication(user_id='kimghw')
             "download_attachments": {
                 "type": "boolean",
                 "required": False,
-                "description": "첨부파일 다운로드 및 텍스트 변환",
+                "description": "첨부파일 다운로드 및 텍스트 변환 (로컬 저장만, OneDrive 저장 불가). 첨부파일을 OneDrive에 저장하려면 attachmentManager 도구를 사용하세요.",
                 "default": False,
                 "example": True
             },
@@ -747,7 +749,7 @@ def get_tool_help(tool_name: str = None) -> str:
 📖 MCP Mail Query Server - Available Tools
 {'='*60}
 
-🔧 핵심 툴 (5개):
+🔧 핵심 툴 (6개):
 
 1. 📝 register_account
    계정 등록: OAuth 인증 정보와 함께 새 이메일 계정을 등록합니다.
@@ -759,9 +761,14 @@ def get_tool_help(tool_name: str = None) -> str:
    인증 시작: OAuth 인증을 시작하고 인증 URL을 받습니다.
 
 4. 📧 query_email
-   이메일 조회: 이메일을 조회하고 첨부파일을 다운로드/변환합니다.
+   이메일 조회: 이메일을 조회하고 첨부파일을 분석합니다.
+   ⚠️  주의: 첨부파일은 분석만 가능 (OneDrive 저장 불가)
 
-5. ❓ help
+5. 📎 attachmentManager
+   첨부파일 관리: 특정 키워드로 첨부파일을 검색하고 OneDrive에 저장합니다.
+   💡 첨부파일을 OneDrive에 저장하려면 이 도구를 사용하세요.
+
+6. ❓ help
    도움말: 각 툴의 자세한 사용법을 확인합니다.
 
 📖 사용 순서:
