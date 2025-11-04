@@ -641,9 +641,18 @@ class UnifiedMCPServer:
 
                 # Redirect URI 검증
                 if redirect_uri not in client["dcr_redirect_uris"]:
-                    logger.warning(f"⚠️ Invalid redirect_uri: {redirect_uri} not in {client['dcr_redirect_uris']}")
+                    logger.error(
+                        f"❌ REDIRECT_URI_MISMATCH:\n"
+                        f"  Requested: {redirect_uri}\n"
+                        f"  Allowed:   {client['dcr_redirect_uris']}\n"
+                        f"  Client:    {client_id}\n"
+                        f"  Hint: Set DCR_OAUTH_REDIRECT_URI environment variable or update Azure app registration"
+                    )
                     return JSONResponse(
-                        {"error": "invalid_request", "error_description": "Invalid redirect_uri"},
+                        {
+                            "error": "invalid_request",
+                            "error_description": f"Invalid redirect_uri. Requested: {redirect_uri}, Allowed: {client['dcr_redirect_uris']}"
+                        },
                         status_code=400,
                     )
 
@@ -730,6 +739,15 @@ class UnifiedMCPServer:
                 azure_application_id = client["azure_application_id"]
                 # Azure AD에 등록된 redirect URI
                 azure_redirect_uri = client.get("azure_redirect_uri")
+
+                logger.info(
+                    f"🔐 Starting Azure OAuth flow:\n"
+                    f"  Client ID: {client_id}\n"
+                    f"  Azure App ID: {azure_application_id}\n"
+                    f"  Azure Redirect URI: {azure_redirect_uri}\n"
+                    f"  Claude Redirect URI: {redirect_uri}\n"
+                    f"  Scope: {scope}"
+                )
 
                 # state에 내부 auth_code 포함 (DCR 서버에서 매핑에 사용)
                 internal_state = f"{auth_code}:{state}" if state else auth_code
@@ -1221,18 +1239,35 @@ class UnifiedMCPServer:
                 import httpx
                 async with httpx.AsyncClient() as http_client:
                     token_url = f"https://login.microsoftonline.com/{client['azure_tenant_id']}/oauth2/v2.0/token"
+                    azure_redirect = client.get("azure_redirect_uri")
                     token_data = {
                         "client_id": client["azure_application_id"],
                         "client_secret": client["azure_client_secret"],
                         "code": azure_code,
-                        "redirect_uri": client.get("azure_redirect_uri"),
+                        "redirect_uri": azure_redirect,
                         "grant_type": "authorization_code",
                         "scope": scope or os.getenv("DCR_OAUTH_SCOPE", "offline_access User.Read Mail.ReadWrite")
                     }
 
+                    logger.info(f"🔄 Exchanging Azure token with redirect_uri: {azure_redirect}")
+
                     response = await http_client.post(token_url, data=token_data)
                     if response.status_code != 200:
-                        logger.error(f"❌ Azure token exchange failed: {response.text}")
+                        error_details = response.text
+                        logger.error(
+                            f"❌ AZURE_TOKEN_EXCHANGE_FAILED:\n"
+                            f"  Status: {response.status_code}\n"
+                            f"  Redirect URI used: {azure_redirect}\n"
+                            f"  Request URL: {request.url}\n"
+                            f"  Error: {error_details}\n"
+                            f"  Hint: Check if redirect_uri matches Azure Portal configuration"
+                        )
+
+                        # Check if it's a redirect_uri mismatch error
+                        error_hint = ""
+                        if "redirect_uri" in error_details.lower() or "AADSTS50011" in error_details:
+                            error_hint = "<p><strong>⚠️ Redirect URI Mismatch:</strong> The redirect_uri does not match Azure Portal configuration.</p>"
+
                         return Response(
                             f"""
                             <!DOCTYPE html>
@@ -1241,7 +1276,13 @@ class UnifiedMCPServer:
                             <body>
                                 <h1>❌ Authentication Failed</h1>
                                 <p>Failed to exchange Azure token</p>
-                                <details><summary>Error Details</summary>{response.text}</details>
+                                {error_hint}
+                                <details>
+                                    <summary>Error Details</summary>
+                                    <pre>Status: {response.status_code}
+Redirect URI: {azure_redirect}
+Error: {error_details}</pre>
+                                </details>
                             </body>
                             </html>
                             """,
