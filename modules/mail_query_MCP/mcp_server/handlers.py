@@ -357,10 +357,7 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
 
             # Mail Query 툴 처리
             if name == "search_messages":
-                # Convert "yes"/"no" strings to boolean
-                for key in ["include_body", "download_attachments", "save_emails", "save_csv"]:
-                    if key in arguments:
-                        arguments[key] = arguments[key] == "yes"
+                # Boolean conversion is already handled by preprocess_arguments
                 result = await self.tools.query_email(arguments)
                 return [TextContent(type="text", text=result)]
 
