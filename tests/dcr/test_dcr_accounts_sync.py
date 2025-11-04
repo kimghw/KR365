@@ -81,7 +81,7 @@ def check_env_vars():
         "DCR_AZURE_CLIENT_ID",
         "DCR_AZURE_CLIENT_SECRET",
         "DCR_AZURE_TENANT_ID",
-        "DCR_ALLOWED_USERS"
+        "DCR_ALLOWED_DOMAINS"
     ]
 
     for var in required_vars:

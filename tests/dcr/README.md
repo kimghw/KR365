@@ -52,7 +52,7 @@ DCR_AZURE_CLIENT_ID=your-client-id
 DCR_AZURE_CLIENT_SECRET=your-client-secret
 DCR_AZURE_TENANT_ID=your-tenant-id
 DCR_OAUTH_REDIRECT_URI=http://localhost:8000/oauth/azure_callback
-DCR_ALLOWED_USERS=user@example.com
+DCR_ALLOWED_DOMAINS=example.com,company.com
 
 # 자동 계정 등록 설정
 AUTO_REGISTER_USER_ID=userid

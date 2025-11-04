@@ -49,9 +49,9 @@ class DCRService:
         # Azure AD 설정 로드
         self._load_azure_config()
 
-        # 허용된 사용자 목록
-        allowed_users_str = os.getenv("DCR_ALLOWED_USERS", "").strip()
-        self.allowed_users = [email.strip().lower() for email in allowed_users_str.split(",") if email.strip()] if allowed_users_str else []
+        # 허용된 도메인 목록
+        allowed_domains_str = os.getenv("DCR_ALLOWED_DOMAINS", "").strip()
+        self.allowed_domains = [domain.strip().lower() for domain in allowed_domains_str.split(",") if domain.strip()] if allowed_domains_str else []
 
         # DCR Bearer 토큰 TTL (초)
         ttl_seconds = int(self.config.dcr_access_token_ttl_seconds)
@@ -60,8 +60,8 @@ class DCRService:
             ttl_seconds = 3600
         self.dcr_bearer_ttl_seconds = ttl_seconds
 
-        if self.allowed_users:
-            logger.info(f"✅ DCR access restricted to {len(self.allowed_users)} users")
+        if self.allowed_domains:
+            logger.info(f"✅ DCR access restricted to {len(self.allowed_domains)} domain(s): {', '.join(self.allowed_domains)}")
         else:
             logger.warning("⚠️ DCR access allowed for ALL Azure users")
 
@@ -808,17 +808,24 @@ class DCRService:
         self._execute_query(query, (azure_object_id, auth_code))
 
     def is_user_allowed(self, user_email: str) -> bool:
-        """사용자 허용 여부 확인"""
-        if not self.allowed_users:
+        """사용자 허용 여부 확인 (도메인 기반)"""
+        if not self.allowed_domains:
             return True
 
         user_email_lower = user_email.lower().strip()
-        is_allowed = user_email_lower in self.allowed_users
+
+        # 이메일에서 도메인 추출
+        if "@" not in user_email_lower:
+            logger.warning(f"❌ Invalid email format: {user_email}")
+            return False
+
+        user_domain = user_email_lower.split("@")[1]
+        is_allowed = user_domain in self.allowed_domains
 
         if not is_allowed:
-            logger.warning(f"❌ Access denied for user: {user_email}")
+            logger.warning(f"❌ Access denied for user: {user_email} (domain: {user_domain})")
         else:
-            logger.info(f"✅ Access granted for user: {user_email}")
+            logger.info(f"✅ Access granted for user: {user_email} (domain: {user_domain})")
 
         return is_allowed
 
