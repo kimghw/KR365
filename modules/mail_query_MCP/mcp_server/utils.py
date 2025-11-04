@@ -69,7 +69,8 @@ def preprocess_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
     for field in bool_fields:
         if field in arguments:
             if isinstance(arguments[field], str):
-                arguments[field] = arguments[field].lower() == "true"
+                lower_value = arguments[field].lower()
+                arguments[field] = lower_value in ("true", "yes", "y", "1")
 
     # Set default query_context if not provided
     if "query_context" not in arguments:
