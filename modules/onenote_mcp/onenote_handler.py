@@ -18,9 +18,9 @@ class OneNoteHandler:
     def __init__(self):
         self.db = get_database_manager()
         self.token_service = TokenService()
-        # Beta API 사용 (5,000개 제한 완화 시도)
-        self.graph_base_url = "https://graph.microsoft.com/beta"
-        # self.graph_base_url = "https://graph.microsoft.com/v1.0"
+        # v1.0 API 사용 (Beta보다 빠르고 안정적)
+        self.graph_base_url = "https://graph.microsoft.com/v1.0"
+        # self.graph_base_url = "https://graph.microsoft.com/beta"
 
     def _normalize_onenote_id(self, entity_id: str) -> str:
         """
@@ -222,6 +222,9 @@ class OneNoteHandler:
         Returns:
             섹션 목록
         """
+        import time
+        start_time = time.time()
+
         try:
             access_token = await self._get_access_token(user_id)
             if not access_token:
@@ -234,19 +237,26 @@ class OneNoteHandler:
 
             async with httpx.AsyncClient() as client:
                 # notebook 없이 모든 섹션 직접 조회
+                api_start = time.time()
                 response = await client.get(
                     f"{self.graph_base_url}/me/onenote/sections",
                     headers=headers,
                     timeout=30.0
                 )
+                api_time = time.time() - api_start
 
                 if response.status_code == 200:
                     data = response.json()
                     sections = data.get("value", [])
-                    logger.info(f"✅ 섹션 {len(sections)}개 조회 성공")
+                    total_time = time.time() - start_time
+                    logger.info(f"✅ 섹션 {len(sections)}개 조회 성공 (총 {total_time:.2f}초, API {api_time:.2f}초)")
                     return {
                         "success": True,
-                        "sections": sections
+                        "sections": sections,
+                        "response_time": {
+                            "total": total_time,
+                            "api": api_time
+                        }
                     }
                 else:
                     error_msg = f"섹션 조회 실패: {response.status_code} - {response.text}"
@@ -269,6 +279,9 @@ class OneNoteHandler:
         Returns:
             페이지 목록
         """
+        import time
+        start_time = time.time()
+
         try:
             access_token = await self._get_access_token(user_id)
             if not access_token:
@@ -288,19 +301,26 @@ class OneNoteHandler:
                 url = f"{self.graph_base_url}/me/onenote/pages"
 
             async with httpx.AsyncClient() as client:
+                api_start = time.time()
                 response = await client.get(
                     url,
                     headers=headers,
                     timeout=30.0
                 )
+                api_time = time.time() - api_start
 
                 if response.status_code == 200:
                     data = response.json()
                     pages = data.get("value", [])
-                    logger.info(f"✅ 페이지 {len(pages)}개 조회 성공")
+                    total_time = time.time() - start_time
+                    logger.info(f"✅ 페이지 {len(pages)}개 조회 성공 (총 {total_time:.2f}초, API {api_time:.2f}초)")
                     return {
                         "success": True,
-                        "pages": pages
+                        "pages": pages,
+                        "response_time": {
+                            "total": total_time,
+                            "api": api_time
+                        }
                     }
                 else:
                     error_msg = f"페이지 조회 실패: {response.status_code} - {response.text}"

@@ -137,8 +137,8 @@ class OneNoteHandlers:
                 }
             ),
             Tool(
-                name="db_onenote_update",
-                description="OneNote 섹션 또는 페이지 정보를 데이터베이스에 저장/업데이트합니다.",
+                name="onenote_db_initialization",
+                description="OneNote 섹션 또는 페이지 정보를 데이터베이스에 초기화/저장합니다. API에서 조회한 데이터를 로컬 DB에 동기화할 때 사용합니다.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -169,6 +169,30 @@ class OneNoteHandlers:
                         "page_title": {
                             "type": "string",
                             "description": "페이지 제목 (페이지 저장 시 필수)"
+                        }
+                    },
+                    "required": []
+                }
+            ),
+            Tool(
+                name="get_recent_onenote_items",
+                description="최근 사용한 OneNote 섹션과 페이지 목록을 조회합니다. 기본적으로 각각 3개씩 테이블 형식으로 표시합니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "user_id": {
+                            "type": "string",
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+                        },
+                        "section_limit": {
+                            "type": "integer",
+                            "description": "조회할 섹션 개수 (기본값: 3)",
+                            "default": 3
+                        },
+                        "page_limit": {
+                            "type": "integer",
+                            "description": "조회할 페이지 개수 (기본값: 3)",
+                            "default": 3
                         }
                     },
                     "required": []
@@ -443,7 +467,7 @@ class OneNoteHandlers:
                 response = UpdatePageResponse(**result)
                 return [TextContent(type="text", text=response.model_dump_json(indent=2))]
 
-            elif name == "db_onenote_update":
+            elif name == "onenote_db_initialization":
                 user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
                 section_id = arguments.get("section_id")
                 section_name = arguments.get("section_name")
@@ -492,6 +516,77 @@ class OneNoteHandlers:
                     "updates": results
                 }
                 return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+
+            elif name == "get_recent_onenote_items":
+                user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
+                section_limit = arguments.get("section_limit", 3)
+                page_limit = arguments.get("page_limit", 3)
+
+                # 최근 사용한 섹션 조회
+                recent_sections = self.db_service.get_recent_section(user_id, section_limit)
+                if not isinstance(recent_sections, list):
+                    recent_sections = [recent_sections] if recent_sections else []
+
+                # 최근 사용한 페이지 조회
+                recent_pages = self.db_service.get_recent_page(user_id, page_limit)
+                if not isinstance(recent_pages, list):
+                    recent_pages = [recent_pages] if recent_pages else []
+
+                # 테이블 형식으로 출력 준비
+                output_lines = []
+
+                # 섹션 테이블
+                output_lines.append("📂 최근 사용한 섹션")
+                output_lines.append("=" * 120)
+
+                if recent_sections:
+                    # 헤더
+                    output_lines.append(f"{'섹션명':<30} {'노트북':<15} {'최근 사용':<20}")
+                    output_lines.append(f"{'섹션 ID':<120}")
+                    output_lines.append("-" * 120)
+
+                    for section in recent_sections:
+                        section_name = section.get('section_name', '')[:30]
+                        section_id = section.get('section_id', '')
+                        notebook_name = section.get('notebook_name', '알 수 없음')[:15]
+                        last_accessed = section.get('last_accessed', '')
+                        if last_accessed:
+                            last_accessed = last_accessed.split('.')[0][:20]  # 밀리초 제거
+
+                        output_lines.append(f"{section_name:<30} {notebook_name:<15} {last_accessed:<20}")
+                        output_lines.append(f"  ID: {section_id}")
+                        output_lines.append("")  # 빈 줄로 구분
+                else:
+                    output_lines.append("최근 사용한 섹션이 없습니다.")
+
+                output_lines.append("")  # 빈 줄
+
+                # 페이지 테이블
+                output_lines.append("📄 최근 사용한 페이지")
+                output_lines.append("=" * 120)
+
+                if recent_pages:
+                    # 헤더
+                    output_lines.append(f"{'페이지 제목':<35} {'최근 사용':<20}")
+                    output_lines.append(f"{'페이지 ID':<120}")
+                    output_lines.append("-" * 120)
+
+                    for page in recent_pages:
+                        page_title = page.get('page_title', '')[:35]
+                        page_id = page.get('page_id', '')
+                        last_accessed = page.get('last_accessed', '')
+                        if last_accessed:
+                            last_accessed = last_accessed.split('.')[0][:20]  # 밀리초 제거
+
+                        output_lines.append(f"{page_title:<35} {last_accessed:<20}")
+                        output_lines.append(f"  ID: {page_id}")
+                        output_lines.append("")  # 빈 줄로 구분
+                else:
+                    output_lines.append("최근 사용한 페이지가 없습니다.")
+
+                result_text = "\n".join(output_lines)
+
+                return [TextContent(type="text", text=result_text)]
 
             else:
                 error_msg = f"알 수 없는 도구: {name}"
@@ -646,7 +741,7 @@ class OneNoteHandlers:
                 )
                 return result
 
-            elif name == "db_onenote_update":
+            elif name == "onenote_db_initialization":
                 user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
                 section_id = arguments.get("section_id")
                 section_name = arguments.get("section_name")
