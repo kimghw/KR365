@@ -249,27 +249,36 @@ class OneNoteHandlers:
                 elif action == "list_sections":
                     filter_section_name = arguments.get("section_name")  # 선택적 필터
 
-                    result = await self.onenote_handler.list_sections(user_id)
+                    # 먼저 DB에서 섹션 목록 조회
+                    db_sections = self.db_service.list_sections(user_id)
 
-                    # DB에 섹션들 저장 및 필터링
-                    if result.get("success") and result.get("sections"):
-                        sections = result["sections"]
+                    # DB에 섹션이 없으면 API에서 조회 및 저장
+                    if not db_sections:
+                        logger.info("📌 DB에 섹션 정보 없음 - API에서 조회 시작")
+                        result = await self.onenote_handler.list_sections(user_id)
 
-                        for section in sections:
-                            section_id = section.get("id")
-                            section_name = section.get("displayName") or section.get("name")
-                            # parentNotebook에서 notebook 정보 추출
-                            parent_notebook = section.get("parentNotebook", {})
-                            notebook_id = parent_notebook.get("id", "")
-                            notebook_name = parent_notebook.get("displayName", "")
+                        # DB에 섹션들 저장
+                        if result.get("success") and result.get("sections"):
+                            sections = result["sections"]
 
-                            if section_id and section_name:
-                                self.db_service.save_section(
-                                    user_id, notebook_id, section_id, section_name,
-                                    notebook_name=notebook_name,
-                                    update_accessed=True  # 조회 시 last_accessed 업데이트
-                                )
-                                logger.info(f"✅ 섹션 자동 저장: {section_name}")
+                            for section in sections:
+                                section_id = section.get("id")
+                                section_name = section.get("displayName") or section.get("name")
+                                # parentNotebook에서 notebook 정보 추출
+                                parent_notebook = section.get("parentNotebook", {})
+                                notebook_id = parent_notebook.get("id", "")
+                                notebook_name = parent_notebook.get("displayName", "")
+
+                                if section_id and section_name:
+                                    self.db_service.save_section(
+                                        user_id, notebook_id, section_id, section_name,
+                                        notebook_name=notebook_name,
+                                        update_accessed=True  # 조회 시 last_accessed 업데이트
+                                    )
+                                    logger.info(f"✅ 섹션 자동 저장: {section_name}")
+                    else:
+                        logger.info(f"📌 DB에서 섹션 {len(db_sections)}개 조회")
+                        result = await self.onenote_handler.list_sections(user_id)
 
                         # section_name 필터링
                         if filter_section_name:
@@ -306,28 +315,37 @@ class OneNoteHandlers:
                             section_id = section_info['section_id']
                             logger.info(f"📌 DB에서 섹션 ID 조회: {section_name_filter} -> {section_id}")
 
-                    result = await self.onenote_handler.list_pages(user_id, section_id)
+                    # 먼저 DB에서 페이지 목록 조회
+                    db_pages = self.db_service.list_pages(user_id, section_id)
 
-                    # DB에 페이지들 저장 및 필터링
-                    if result.get("success") and result.get("pages"):
-                        pages = result["pages"]
+                    # DB에 페이지가 없으면 API에서 조회 및 저장
+                    if not db_pages:
+                        logger.info("📌 DB에 페이지 정보 없음 - API에서 조회 시작")
+                        result = await self.onenote_handler.list_pages(user_id, section_id)
 
-                        for page in pages:
-                            page_id = page.get("id")
-                            page_title = page.get("title")
-                            # parentSection에서 section_id 추출 (모든 페이지 조회 시)
-                            if not section_id:
-                                parent_section = page.get("parentSection", {})
-                                page_section_id = parent_section.get("id", "")
-                            else:
-                                page_section_id = section_id
+                        # DB에 페이지들 저장
+                        if result.get("success") and result.get("pages"):
+                            pages = result["pages"]
 
-                            if page_id and page_title and page_section_id:
-                                self.db_service.save_page(
-                                    user_id, page_section_id, page_id, page_title,
-                                    update_accessed=True  # 조회 시 last_accessed 업데이트
-                                )
-                                logger.info(f"✅ 페이지 자동 저장: {page_title}")
+                            for page in pages:
+                                page_id = page.get("id")
+                                page_title = page.get("title")
+                                # parentSection에서 section_id 추출 (모든 페이지 조회 시)
+                                if not section_id:
+                                    parent_section = page.get("parentSection", {})
+                                    page_section_id = parent_section.get("id", "")
+                                else:
+                                    page_section_id = section_id
+
+                                if page_id and page_title and page_section_id:
+                                    self.db_service.save_page(
+                                        user_id, page_section_id, page_id, page_title,
+                                        update_accessed=True  # 조회 시 last_accessed 업데이트
+                                    )
+                                    logger.info(f"✅ 페이지 자동 저장: {page_title}")
+                    else:
+                        logger.info(f"📌 DB에서 페이지 {len(db_pages)}개 조회")
+                        result = await self.onenote_handler.list_pages(user_id, section_id)
 
                         # page_title 필터링
                         if page_title_filter:
@@ -527,10 +545,54 @@ class OneNoteHandlers:
                 if not isinstance(recent_sections, list):
                     recent_sections = [recent_sections] if recent_sections else []
 
+                # DB에 섹션 정보가 없으면 API에서 조회 및 저장
+                if not recent_sections:
+                    logger.info("📌 DB에 섹션 정보 없음 - API에서 조회 시작")
+                    sections_result = await self.onenote_handler.list_sections(user_id)
+                    if sections_result.get("success") and sections_result.get("sections"):
+                        for section in sections_result["sections"]:
+                            section_id = section.get("id")
+                            section_name = section.get("displayName") or section.get("name")
+                            parent_notebook = section.get("parentNotebook", {})
+                            notebook_id = parent_notebook.get("id", "")
+                            notebook_name = parent_notebook.get("displayName", "")
+
+                            if section_id and section_name:
+                                self.db_service.save_section(
+                                    user_id, notebook_id, section_id, section_name,
+                                    notebook_name=notebook_name,
+                                    update_accessed=True
+                                )
+                        # 다시 DB에서 최근 섹션 조회
+                        recent_sections = self.db_service.get_recent_section(user_id, section_limit)
+                        if not isinstance(recent_sections, list):
+                            recent_sections = [recent_sections] if recent_sections else []
+
                 # 최근 사용한 페이지 조회
                 recent_pages = self.db_service.get_recent_page(user_id, page_limit)
                 if not isinstance(recent_pages, list):
                     recent_pages = [recent_pages] if recent_pages else []
+
+                # DB에 페이지 정보가 없으면 API에서 조회 및 저장
+                if not recent_pages:
+                    logger.info("📌 DB에 페이지 정보 없음 - API에서 조회 시작")
+                    pages_result = await self.onenote_handler.list_pages(user_id)
+                    if pages_result.get("success") and pages_result.get("pages"):
+                        for page in pages_result["pages"]:
+                            page_id = page.get("id")
+                            page_title = page.get("title")
+                            parent_section = page.get("parentSection", {})
+                            page_section_id = parent_section.get("id", "")
+
+                            if page_id and page_title and page_section_id:
+                                self.db_service.save_page(
+                                    user_id, page_section_id, page_id, page_title,
+                                    update_accessed=True
+                                )
+                        # 다시 DB에서 최근 페이지 조회
+                        recent_pages = self.db_service.get_recent_page(user_id, page_limit)
+                        if not isinstance(recent_pages, list):
+                            recent_pages = [recent_pages] if recent_pages else []
 
                 # 테이블 형식으로 출력 준비
                 output_lines = []
@@ -638,24 +700,34 @@ class OneNoteHandlers:
 
                 elif action == "list_sections":
                     filter_section_name = arguments.get("section_name")
-                    result = await self.onenote_handler.list_sections(user_id)
 
-                    # DB에 섹션들 저장 및 필터링
-                    if result.get("success") and result.get("sections"):
-                        sections = result["sections"]
-                        for section in sections:
-                            section_id = section.get("id")
-                            section_name = section.get("displayName") or section.get("name")
-                            parent_notebook = section.get("parentNotebook", {})
-                            notebook_id = parent_notebook.get("id", "")
-                            notebook_name = parent_notebook.get("displayName", "")
+                    # 먼저 DB에서 섹션 목록 조회
+                    db_sections = self.db_service.list_sections(user_id)
 
-                            if section_id and section_name:
-                                self.db_service.save_section(
-                                    user_id, notebook_id, section_id, section_name,
-                                    notebook_name=notebook_name,
-                                    update_accessed=True
-                                )
+                    # DB에 섹션이 없으면 API에서 조회 및 저장
+                    if not db_sections:
+                        logger.info("📌 DB에 섹션 정보 없음 - API에서 조회 시작")
+                        result = await self.onenote_handler.list_sections(user_id)
+
+                        # DB에 섹션들 저장
+                        if result.get("success") and result.get("sections"):
+                            sections = result["sections"]
+                            for section in sections:
+                                section_id = section.get("id")
+                                section_name = section.get("displayName") or section.get("name")
+                                parent_notebook = section.get("parentNotebook", {})
+                                notebook_id = parent_notebook.get("id", "")
+                                notebook_name = parent_notebook.get("displayName", "")
+
+                                if section_id and section_name:
+                                    self.db_service.save_section(
+                                        user_id, notebook_id, section_id, section_name,
+                                        notebook_name=notebook_name,
+                                        update_accessed=True
+                                    )
+                    else:
+                        logger.info(f"📌 DB에서 섹션 {len(db_sections)}개 조회")
+                        result = await self.onenote_handler.list_sections(user_id)
 
                         if filter_section_name:
                             sections = [s for s in sections if filter_section_name.lower() in (s.get("displayName") or s.get("name") or "").lower()]
@@ -674,25 +746,34 @@ class OneNoteHandlers:
                         if section_info:
                             section_id = section_info['section_id']
 
-                    result = await self.onenote_handler.list_pages(user_id, section_id)
+                    # 먼저 DB에서 페이지 목록 조회
+                    db_pages = self.db_service.list_pages(user_id, section_id)
 
-                    # DB에 페이지들 저장 및 필터링
-                    if result.get("success") and result.get("pages"):
-                        pages = result["pages"]
-                        for page in pages:
-                            page_id = page.get("id")
-                            page_title = page.get("title")
-                            if not section_id:
-                                parent_section = page.get("parentSection", {})
-                                page_section_id = parent_section.get("id", "")
-                            else:
-                                page_section_id = section_id
+                    # DB에 페이지가 없으면 API에서 조회 및 저장
+                    if not db_pages:
+                        logger.info("📌 DB에 페이지 정보 없음 - API에서 조회 시작")
+                        result = await self.onenote_handler.list_pages(user_id, section_id)
 
-                            if page_id and page_title and page_section_id:
-                                self.db_service.save_page(
-                                    user_id, page_section_id, page_id, page_title,
-                                    update_accessed=True
-                                )
+                        # DB에 페이지들 저장
+                        if result.get("success") and result.get("pages"):
+                            pages = result["pages"]
+                            for page in pages:
+                                page_id = page.get("id")
+                                page_title = page.get("title")
+                                if not section_id:
+                                    parent_section = page.get("parentSection", {})
+                                    page_section_id = parent_section.get("id", "")
+                                else:
+                                    page_section_id = section_id
+
+                                if page_id and page_title and page_section_id:
+                                    self.db_service.save_page(
+                                        user_id, page_section_id, page_id, page_title,
+                                        update_accessed=True
+                                    )
+                    else:
+                        logger.info(f"📌 DB에서 페이지 {len(db_pages)}개 조회")
+                        result = await self.onenote_handler.list_pages(user_id, section_id)
 
                         if page_title_filter:
                             pages = [p for p in pages if page_title_filter.lower() in (p.get("title") or "").lower()]

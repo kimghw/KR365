@@ -43,6 +43,10 @@ def env_parse_delegated_permissions(permissions_str: Optional[str]) -> List[str]
     if "offline_access" not in permissions:
         permissions.append("offline_access")
 
+    # User.Read에 포함되지 않는 스코프 검증 (.All 제외)
+    from ._scope_validator import validate_scopes_coverage
+    validate_scopes_coverage(permissions, base_scope="User.Read")
+
     return permissions
 
 
