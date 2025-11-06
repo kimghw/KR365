@@ -59,6 +59,9 @@ def save_azure_config_to_db(service) -> None:
     if not all([service.azure_application_id, service.azure_client_secret]):
         return
     try:
+        # ALWAYS use the redirect URI from service (which already prioritizes env)
+        redirect_uri = service.azure_redirect_uri
+
         existing = service._fetch_one(
             "SELECT application_id FROM dcr_azure_app WHERE application_id = ?",
             (service.azure_application_id,),
@@ -73,11 +76,11 @@ def save_azure_config_to_db(service) -> None:
                 (
                     service.crypto.account_encrypt_sensitive_data(service.azure_client_secret),
                     service.azure_tenant_id,
-                    service.azure_redirect_uri,
+                    redirect_uri,  # Use the redirect_uri from service
                     service.azure_application_id,
                 ),
             )
-            logger.info(f"✅ Updated Azure config in dcr_azure_app: {service.azure_application_id}")
+            logger.info(f"✅ Updated Azure config in dcr_azure_app: {service.azure_application_id}, redirect_uri: {redirect_uri}")
         else:
             service._execute_query(
                 """
@@ -88,10 +91,10 @@ def save_azure_config_to_db(service) -> None:
                     service.azure_application_id,
                     service.crypto.account_encrypt_sensitive_data(service.azure_client_secret),
                     service.azure_tenant_id,
-                    service.azure_redirect_uri,
+                    redirect_uri,  # Use the redirect_uri from service
                 ),
             )
-            logger.info(f"✅ Saved Azure config to dcr_azure_app: {service.azure_application_id}")
+            logger.info(f"✅ Saved Azure config to dcr_azure_app: {service.azure_application_id}, redirect_uri: {redirect_uri}")
     except Exception as e:
         logger.error(f"❌ Failed to save Azure config to DB: {e}")
 
@@ -123,7 +126,15 @@ def load_azure_config(service) -> None:
         service.azure_application_id = current_app_id
         service.azure_client_secret = current_secret
         service.azure_tenant_id = current_tenant
-        service.azure_redirect_uri = current_redirect
+        # ALWAYS prefer env_redirect from DCR_OAUTH_REDIRECT_URI over DB value
+        # This ensures .env value takes precedence during runtime
+        if env_redirect:
+            service.azure_redirect_uri = env_redirect
+            if env_redirect != current_redirect:
+                logger.info(f"🔄 Using redirect URI from environment: {env_redirect} (DB has: {current_redirect})")
+        else:
+            service.azure_redirect_uri = current_redirect
+            logger.info(f"📌 Using redirect URI from DB: {current_redirect}")
 
         # Apply env overrides if both id and secret are present
         if env_app_id and env_secret:
@@ -180,10 +191,11 @@ def load_azure_config(service) -> None:
         service.azure_application_id = env_app_id
         service.azure_client_secret = env_secret
         service.azure_tenant_id = env_tenant
-        service.azure_redirect_uri = env_redirect
+        # Always prefer env_redirect from DCR_OAUTH_REDIRECT_URI
+        service.azure_redirect_uri = env_redirect or service.config.oauth_redirect_uri
 
         if service.azure_application_id and service.azure_client_secret:
-            logger.info(f"✅ Loaded Azure config from environment: {service.azure_application_id}")
+            logger.info(f"✅ Loaded Azure config from environment: {service.azure_application_id}, redirect_uri: {service.azure_redirect_uri}")
             save_azure_config_to_db(service)
         else:
             logger.warning("⚠️ No Azure config found. DCR will not work.")

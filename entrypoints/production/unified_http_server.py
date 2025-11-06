@@ -25,11 +25,19 @@ from starlette.routing import Mount, Route
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Load .env file
+# Load .env file and ensure DCR_OAUTH_REDIRECT_URI is set globally
 env_file = PROJECT_ROOT / ".env"
 if env_file.exists():
-    load_dotenv(env_file)
+    load_dotenv(env_file, override=True)  # override=True ensures env vars are updated
     print(f"✅ Loaded environment variables from {env_file}")
+
+    # Ensure DCR_OAUTH_REDIRECT_URI is set in environment
+    redirect_uri = os.getenv("DCR_OAUTH_REDIRECT_URI")
+    if redirect_uri:
+        os.environ["DCR_OAUTH_REDIRECT_URI"] = redirect_uri
+        print(f"✅ DCR_OAUTH_REDIRECT_URI set globally: {redirect_uri}")
+    else:
+        print("⚠️ DCR_OAUTH_REDIRECT_URI not found in .env file")
 
 from modules.mail_query_MCP.mcp_server.http_server import HTTPStreamingMailAttachmentServer
 from modules.enrollment.mcp_server.http_server import HTTPStreamingAuthServer

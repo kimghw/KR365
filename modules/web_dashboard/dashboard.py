@@ -40,11 +40,23 @@ class DashboardService:
             server_script = PROJECT_ROOT / "entrypoints" / "production" / "unified_http_server.py"
             log_file = LOG_DIR / "unified_server.log"
 
+            # Load environment variables from .env file
+            env = os.environ.copy()
+            if ENV_FILE.exists():
+                with open(ENV_FILE) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            env[key.strip()] = value.strip()
+                logger.info(f"✅ Loaded environment variables from {ENV_FILE} for server process")
+
             process = subprocess.Popen(
                 ["python3", str(server_script), "--host", "0.0.0.0", "--port", "8000"],
                 stdout=open(log_file, 'a'),
                 stderr=subprocess.STDOUT,
-                cwd=PROJECT_ROOT
+                cwd=PROJECT_ROOT,
+                env=env  # Pass environment variables to subprocess
             )
 
             # Save PID
@@ -513,6 +525,261 @@ class DashboardService:
             logger.error(f"Error getting table schema: {e}")
             return []
 
+    @staticmethod
+    def clear_log_file(log_name: str) -> Dict:
+        """Clear (truncate) a specific log file"""
+        try:
+            log_file = LOG_DIR / log_name
+            if not log_file.exists():
+                return {"success": False, "error": f"Log file not found: {log_name}"}
+
+            # Truncate the file
+            with open(log_file, 'w') as f:
+                f.truncate(0)
+
+            logger.info(f"Cleared log file: {log_name}")
+            return {"success": True, "message": f"Cleared {log_name}"}
+        except Exception as e:
+            logger.error(f"Error clearing log file: {e}")
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def clear_all_logs() -> Dict:
+        """Clear all log files"""
+        try:
+            cleared_files = []
+            failed_files = []
+
+            if LOG_DIR.exists():
+                for log_file in LOG_DIR.glob("*.log"):
+                    try:
+                        with open(log_file, 'w') as f:
+                            f.truncate(0)
+                        cleared_files.append(log_file.name)
+                    except Exception as e:
+                        failed_files.append({"file": log_file.name, "error": str(e)})
+
+            logger.info(f"Cleared {len(cleared_files)} log files")
+
+            return {
+                "success": True,
+                "cleared": cleared_files,
+                "failed": failed_files,
+                "message": f"Cleared {len(cleared_files)} log files"
+            }
+        except Exception as e:
+            logger.error(f"Error clearing all logs: {e}")
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def clear_database(db_path: str) -> Dict:
+        """Clear all data from database (delete all records from all tables)"""
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # Get all table names
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = [row[0] for row in cursor.fetchall()]
+
+            cleared_tables = []
+            failed_tables = []
+
+            for table in tables:
+                try:
+                    cursor.execute(f"DELETE FROM {table}")
+                    cleared_tables.append(table)
+                except Exception as e:
+                    failed_tables.append({"table": table, "error": str(e)})
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"Cleared {len(cleared_tables)} tables in database: {db_path}")
+
+            return {
+                "success": True,
+                "cleared_tables": cleared_tables,
+                "failed_tables": failed_tables,
+                "message": f"Cleared {len(cleared_tables)} tables"
+            }
+        except Exception as e:
+            logger.error(f"Error clearing database: {e}")
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def reset_database(db_path: str) -> Dict:
+        """Completely reset database (drop all tables)"""
+        try:
+            # Use isolation_level=None for autocommit mode
+            conn = sqlite3.connect(db_path, isolation_level=None)
+            cursor = conn.cursor()
+
+            # Disable foreign key constraints to allow dropping tables
+            cursor.execute("PRAGMA foreign_keys = OFF")
+
+            # Get all table names (exclude SQLite internal tables)
+            cursor.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table'
+                AND name NOT LIKE 'sqlite_%'
+                AND name NOT IN ('sqlite_sequence', 'sqlite_stat1', 'sqlite_stat2', 'sqlite_stat3', 'sqlite_stat4')
+            """)
+            tables = [row[0] for row in cursor.fetchall()]
+
+            # Also get views and triggers to drop them first
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='view'")
+            views = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+            triggers = [row[0] for row in cursor.fetchall()]
+
+            dropped_items = []
+            failed_items = []
+
+            # Drop triggers first
+            for trigger in triggers:
+                try:
+                    cursor.execute(f"DROP TRIGGER IF EXISTS '{trigger}'")
+                    dropped_items.append(f"trigger:{trigger}")
+                    logger.debug(f"Dropped trigger: {trigger}")
+                except Exception as e:
+                    failed_items.append({"item": f"trigger:{trigger}", "error": str(e)})
+                    logger.error(f"Failed to drop trigger {trigger}: {e}")
+
+            # Drop views
+            for view in views:
+                try:
+                    cursor.execute(f"DROP VIEW IF EXISTS '{view}'")
+                    dropped_items.append(f"view:{view}")
+                    logger.debug(f"Dropped view: {view}")
+                except Exception as e:
+                    failed_items.append({"item": f"view:{view}", "error": str(e)})
+                    logger.error(f"Failed to drop view {view}: {e}")
+
+            # Drop tables - sometimes need multiple passes due to foreign key dependencies
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                remaining_tables = []
+                for table in tables:
+                    if not any(item.endswith(f":{table}") for item in dropped_items):
+                        try:
+                            cursor.execute(f"DROP TABLE IF EXISTS '{table}'")
+                            dropped_items.append(f"table:{table}")
+                            logger.debug(f"Dropped table: {table}")
+                        except Exception as e:
+                            remaining_tables.append(table)
+                            if attempt == max_attempts - 1:
+                                failed_items.append({"item": f"table:{table}", "error": str(e)})
+                                logger.error(f"Failed to drop table {table} after {max_attempts} attempts: {e}")
+                tables = remaining_tables
+                if not tables:
+                    break
+
+            # Vacuum to clean up the database
+            cursor.execute("VACUUM")
+
+            # Re-enable foreign key constraints
+            cursor.execute("PRAGMA foreign_keys = ON")
+
+            conn.close()
+
+            # Count only tables from dropped_items
+            dropped_tables = [item for item in dropped_items if item.startswith("table:")]
+            logger.info(f"Dropped {len(dropped_tables)} tables, {len(dropped_items)} total items in database: {db_path}")
+
+            return {
+                "success": True,
+                "dropped_items": dropped_items,
+                "failed_items": failed_items,
+                "message": f"Dropped {len(dropped_tables)} tables, {len(dropped_items)} total database objects"
+            }
+        except Exception as e:
+            logger.error(f"Error resetting database: {e}")
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def get_dcr_config() -> Dict:
+        """Get current DCR configuration from database"""
+        try:
+            # Check if this is the DCR database
+            dcr_db_path = Path(config.dcr_database_path)
+            if not dcr_db_path.exists():
+                return {"success": False, "error": "DCR database not found"}
+
+            conn = sqlite3.connect(dcr_db_path)
+            cursor = conn.cursor()
+
+            # Get Azure app config
+            cursor.execute("""
+                SELECT application_id, tenant_id, redirect_uri
+                FROM dcr_azure_app
+                LIMIT 1
+            """)
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                return {
+                    "success": True,
+                    "application_id": result[0],
+                    "tenant_id": result[1],
+                    "redirect_uri": result[2],
+                    "env_redirect_uri": os.getenv("DCR_OAUTH_REDIRECT_URI")
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "No DCR configuration found in database"
+                }
+        except Exception as e:
+            logger.error(f"Error getting DCR config: {e}")
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def update_dcr_redirect_uri(new_redirect_uri: str) -> Dict:
+        """Update DCR redirect URI in database and .env file"""
+        try:
+            if not new_redirect_uri:
+                return {"success": False, "error": "Redirect URI is required"}
+
+            # Update in database
+            dcr_db_path = Path(config.dcr_database_path)
+            if dcr_db_path.exists():
+                conn = sqlite3.connect(dcr_db_path)
+                cursor = conn.cursor()
+
+                # Check if dcr_azure_app exists
+                cursor.execute("SELECT COUNT(*) FROM dcr_azure_app")
+                count = cursor.fetchone()[0]
+
+                if count > 0:
+                    cursor.execute("""
+                        UPDATE dcr_azure_app
+                        SET redirect_uri = ?
+                        WHERE 1=1
+                    """, (new_redirect_uri,))
+                    conn.commit()
+                    conn.close()
+
+                    # Also update .env file
+                    DashboardService.update_env_variable('DCR_OAUTH_REDIRECT_URI', new_redirect_uri)
+
+                    logger.info(f"Updated DCR redirect URI to: {new_redirect_uri}")
+                    return {
+                        "success": True,
+                        "message": f"DCR redirect URI updated to: {new_redirect_uri}"
+                    }
+                else:
+                    conn.close()
+                    return {"success": False, "error": "No DCR configuration found in database"}
+            else:
+                return {"success": False, "error": "DCR database not found"}
+
+        except Exception as e:
+            logger.error(f"Error updating DCR redirect URI: {e}")
+            return {"success": False, "error": str(e)}
+
 
 def create_dashboard_routes() -> List[Route]:
     """Create dashboard routes"""
@@ -679,16 +946,27 @@ def create_dashboard_routes() -> List[Route]:
             padding: 10px;
             background: #f9f9f9;
             border-radius: 6px;
+            transition: background 0.3s;
+        }
+        .env-item:hover {
+            background: #f0f0f0;
         }
         .env-key {
             font-weight: 600;
             color: #667eea;
             min-width: 200px;
+            word-break: break-all;
         }
         .env-value {
             flex: 1;
             color: #333;
             font-family: monospace;
+            font-size: 12px;
+            word-break: break-all;
+            padding: 5px 10px;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
         }
         .log-selector {
             margin-bottom: 15px;
@@ -814,7 +1092,11 @@ def create_dashboard_routes() -> List[Route]:
                     </select>
                 </div>
                 <div class="log-viewer" id="log-content">Select a log file to view its contents</div>
-                <button class="btn btn-primary refresh-btn" onclick="loadLog()">🔄 Refresh Log</button>
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button class="btn btn-primary" onclick="loadLog()">🔄 Refresh Log</button>
+                    <button class="btn btn-danger" onclick="clearCurrentLog()">🗑️ Clear Current Log</button>
+                    <button class="btn btn-danger" onclick="clearAllLogs()">⚠️ Clear All Logs</button>
+                </div>
             </div>
 
             <!-- Endpoints Tab -->
@@ -826,6 +1108,36 @@ def create_dashboard_routes() -> List[Route]:
             <!-- Database Tab -->
             <div id="database-tab" class="tab-content">
                 <h2 style="margin-bottom: 15px;">💾 Database Viewer</h2>
+
+                <!-- DCR Configuration Section -->
+                <div id="dcr-config-section" style="display: none; padding: 15px; background: #f0f9ff; border-radius: 8px; margin-bottom: 20px;">
+                    <h3 style="margin-bottom: 15px; color: #667eea;">🔐 DCR OAuth Configuration</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-bottom: 15px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #666;">Application ID:</label>
+                            <div id="dcr-app-id" style="padding: 10px; background: white; border-radius: 5px; font-family: monospace; font-size: 12px;">Loading...</div>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #666;">Tenant ID:</label>
+                            <div id="dcr-tenant-id" style="padding: 10px; background: white; border-radius: 5px; font-family: monospace; font-size: 12px;">Loading...</div>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #666;">Redirect URI (DB):</label>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="dcr-redirect-uri" class="env-input" style="flex: 1; font-family: monospace; font-size: 12px;" placeholder="https://example.trycloudflare.com/oauth/azure_callback">
+                            <button class="btn btn-primary" onclick="updateDcrRedirectUri()">💾 Save</button>
+                        </div>
+                        <div id="dcr-env-uri" style="margin-top: 5px; padding: 5px; font-size: 11px; color: #666;">
+                            <strong>ENV:</strong> <span id="dcr-env-value">Loading...</span>
+                        </div>
+                    </div>
+                    <div style="padding: 10px; background: #fff3cd; border-radius: 5px; border: 1px solid #ffc107;">
+                        <strong>⚠️ Important:</strong> The redirect URI must match exactly with Azure AD App Registration.
+                        <br>After changing, update Azure Portal and restart the server.
+                    </div>
+                </div>
+
                 <div style="margin-bottom: 15px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
                     <div>
                         <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #666;">Database</label>
@@ -845,6 +1157,11 @@ def create_dashboard_routes() -> List[Route]:
                     </div>
                 </div>
 
+                <div style="margin-bottom: 15px; display: flex; gap: 10px;">
+                    <button class="btn btn-danger" onclick="clearDatabase()">🗑️ Clear Database (Delete Data)</button>
+                    <button class="btn btn-danger" onclick="resetDatabase()">⚠️ Reset Database (Drop Tables)</button>
+                </div>
+
                 <div id="query-results">
                     <h3 style="margin-bottom: 10px; color: #667eea;">Results</h3>
                     <div id="results-content" style="background: #f9f9f9; padding: 15px; border-radius: 6px; font-size: 12px; max-height: 500px; overflow: auto;">
@@ -857,9 +1174,18 @@ def create_dashboard_routes() -> List[Route]:
             <div id="env-tab" class="tab-content">
                 <h2 style="margin-bottom: 15px;">⚙️ Environment Variables</h2>
                 <div class="env-editor">
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                        <select id="env-select" class="env-input" style="flex: 1;" onchange="onEnvSelect()">
+                            <option value="">Select a variable to edit or enter new...</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="loadEnvVariables()">🔄 Refresh</button>
+                    </div>
                     <input type="text" id="new-env-key" class="env-input" placeholder="Variable name (e.g., REDIRECT_URI)">
                     <input type="text" id="new-env-value" class="env-input" placeholder="Value">
-                    <button class="btn btn-primary" onclick="addEnvVariable()">Add/Update Variable</button>
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <button class="btn btn-primary" onclick="addEnvVariable()">💾 Add/Update Variable</button>
+                        <button class="btn btn-danger" onclick="clearEnvForm()">❌ Clear Form</button>
+                    </div>
                 </div>
                 <div id="env-variables" style="margin-top: 20px;">Loading...</div>
             </div>
@@ -1028,12 +1354,26 @@ def create_dashboard_routes() -> List[Route]:
                 const response = await fetch('/dashboard/api/env');
                 const data = await response.json();
 
+                // Update dropdown
+                const select = document.getElementById('env-select');
+                select.innerHTML = '<option value="">Select a variable to edit or enter new...</option>';
+
                 let html = '';
                 for (const [key, value] of Object.entries(data)) {
+                    // Add to dropdown
+                    const option = document.createElement('option');
+                    option.value = key;
+                    option.textContent = key;
+                    option.setAttribute('data-value', value);
+                    select.appendChild(option);
+
+                    // Add to display list with edit button
                     html += `
                         <div class="env-item">
                             <span class="env-key">${key}</span>
                             <span class="env-value">${value}</span>
+                            <button class="btn btn-primary" style="margin-left: auto; padding: 5px 10px; font-size: 12px;"
+                                    onclick="editEnvVariable('${key}', '${value.replace(/'/g, "\\'")}')">✏️ Edit</button>
                         </div>
                     `;
                 }
@@ -1041,6 +1381,38 @@ def create_dashboard_routes() -> List[Route]:
             } catch (error) {
                 console.error('Error loading env variables:', error);
             }
+        }
+
+        // Handle environment variable selection
+        function onEnvSelect() {
+            const select = document.getElementById('env-select');
+            const selectedOption = select.options[select.selectedIndex];
+
+            if (selectedOption.value) {
+                const value = selectedOption.getAttribute('data-value');
+                document.getElementById('new-env-key').value = selectedOption.value;
+                document.getElementById('new-env-value').value = value;
+            }
+        }
+
+        // Edit environment variable
+        function editEnvVariable(key, value) {
+            document.getElementById('new-env-key').value = key;
+            document.getElementById('new-env-value').value = value;
+
+            // Update dropdown selection
+            const select = document.getElementById('env-select');
+            select.value = key;
+
+            // Scroll to editor
+            document.getElementById('env-tab').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Clear environment form
+        function clearEnvForm() {
+            document.getElementById('new-env-key').value = '';
+            document.getElementById('new-env-value').value = '';
+            document.getElementById('env-select').value = '';
         }
 
         // Add environment variable
@@ -1213,6 +1585,9 @@ def create_dashboard_routes() -> List[Route]:
                     select.value = dcrDbPath;
                     await loadDatabaseTables();
 
+                    // Load DCR config when DCR database is selected
+                    loadDcrConfig();
+
                     // After tables are loaded, select dcr_azure_app if it exists
                     setTimeout(async () => {
                         const tableSelect = document.getElementById('table-select');
@@ -1253,6 +1628,16 @@ def create_dashboard_routes() -> List[Route]:
                     select.appendChild(option);
                 });
 
+                // Check if DCR database is selected
+                if (dbPath.includes('dcr.db')) {
+                    // Show DCR config section
+                    document.getElementById('dcr-config-section').style.display = 'block';
+                    loadDcrConfig();
+                } else {
+                    // Hide DCR config section
+                    document.getElementById('dcr-config-section').style.display = 'none';
+                }
+
                 // Clear results
                 document.getElementById('results-content').innerHTML = 'Select a table to see data';
             } catch (error) {
@@ -1266,6 +1651,202 @@ def create_dashboard_routes() -> List[Route]:
             if (tableName) {
                 // Automatically load data when table is selected
                 await selectAllFromTable();
+            }
+        }
+
+        // Clear current log
+        async function clearCurrentLog() {
+            const logName = document.getElementById('log-select').value;
+            if (!logName) {
+                showToast('Please select a log file first');
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to clear the log file "${logName}"?`)) return;
+
+            try {
+                const response = await fetch(`/dashboard/api/logs/${logName}/clear`, {method: 'POST'});
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message || `Cleared ${logName}`);
+                    loadLog(); // Reload the log to show it's empty
+                } else {
+                    showToast('Failed to clear log: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error clearing log:', error);
+                showToast('Error clearing log');
+            }
+        }
+
+        // Clear all logs
+        async function clearAllLogs() {
+            if (!confirm('Are you sure you want to clear ALL log files? This action cannot be undone!')) return;
+
+            try {
+                const response = await fetch('/dashboard/api/logs/clear-all', {method: 'POST'});
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message || 'All logs cleared');
+                    loadLog(); // Reload current log
+                    loadLogFiles(); // Refresh log list
+                } else {
+                    showToast('Failed to clear logs: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error clearing all logs:', error);
+                showToast('Error clearing all logs');
+            }
+        }
+
+        // Clear database (delete data)
+        async function clearDatabase() {
+            const dbPath = document.getElementById('db-select').value;
+            if (!dbPath) {
+                showToast('Please select a database first');
+                return;
+            }
+
+            const dbName = document.getElementById('db-select').options[document.getElementById('db-select').selectedIndex].text;
+            if (!confirm(`Are you sure you want to DELETE ALL DATA from "${dbName}"? This will remove all records but keep the table structure.`)) return;
+
+            try {
+                const response = await fetch('/dashboard/api/db/clear', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({db_path: dbPath})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message || 'Database cleared');
+                    // Clear the results view
+                    document.getElementById('results-content').innerHTML = '<p style="color: #666;">Database cleared. Select a table to see empty structure.</p>';
+                    // Reload current table if selected
+                    const tableName = document.getElementById('table-select').value;
+                    if (tableName) {
+                        selectAllFromTable();
+                    }
+                } else {
+                    showToast('Failed to clear database: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error clearing database:', error);
+                showToast('Error clearing database');
+            }
+        }
+
+        // Reset database (drop tables)
+        async function resetDatabase() {
+            const dbPath = document.getElementById('db-select').value;
+            if (!dbPath) {
+                showToast('Please select a database first');
+                return;
+            }
+
+            const dbName = document.getElementById('db-select').options[document.getElementById('db-select').selectedIndex].text;
+            if (!confirm(`⚠️ WARNING: Are you sure you want to COMPLETELY RESET "${dbName}"? This will DROP ALL TABLES and cannot be undone!`)) return;
+            if (!confirm(`This is your final warning! All tables and data in "${dbName}" will be permanently deleted. Continue?`)) return;
+
+            try {
+                const response = await fetch('/dashboard/api/db/reset', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({db_path: dbPath})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message || 'Database reset');
+                    // Clear everything
+                    document.getElementById('table-select').innerHTML = '<option value="">Select table...</option>';
+                    document.getElementById('results-content').innerHTML = '<p style="color: #666;">Database has been reset. All tables have been dropped.</p>';
+                    // Reload tables (should be empty)
+                    loadDatabaseTables();
+                } else {
+                    showToast('Failed to reset database: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error resetting database:', error);
+                showToast('Error resetting database');
+            }
+        }
+
+        // Load DCR configuration
+        async function loadDcrConfig() {
+            try {
+                const response = await fetch('/dashboard/api/dcr/config');
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('dcr-app-id').textContent = data.application_id || 'Not configured';
+                    document.getElementById('dcr-tenant-id').textContent = data.tenant_id || 'common';
+                    document.getElementById('dcr-redirect-uri').value = data.redirect_uri || '';
+
+                    // Show environment value
+                    if (data.env_redirect_uri) {
+                        document.getElementById('dcr-env-value').textContent = data.env_redirect_uri;
+                        document.getElementById('dcr-env-value').style.color = '#28a745';
+                    } else {
+                        document.getElementById('dcr-env-value').textContent = 'Not set in .env';
+                        document.getElementById('dcr-env-value').style.color = '#dc3545';
+                    }
+                } else {
+                    document.getElementById('dcr-app-id').textContent = 'Not configured';
+                    document.getElementById('dcr-tenant-id').textContent = 'Not configured';
+                    document.getElementById('dcr-redirect-uri').value = '';
+                    document.getElementById('dcr-env-value').textContent = data.error || 'Configuration not found';
+                }
+            } catch (error) {
+                console.error('Error loading DCR config:', error);
+                document.getElementById('dcr-app-id').textContent = 'Error loading';
+                document.getElementById('dcr-tenant-id').textContent = 'Error loading';
+            }
+        }
+
+        // Update DCR redirect URI
+        async function updateDcrRedirectUri() {
+            const newUri = document.getElementById('dcr-redirect-uri').value.trim();
+
+            if (!newUri) {
+                showToast('Please enter a redirect URI');
+                return;
+            }
+
+            if (!newUri.startsWith('http://') && !newUri.startsWith('https://')) {
+                showToast('Redirect URI must start with http:// or https://');
+                return;
+            }
+
+            if (!confirm(`Update DCR redirect URI to:\n${newUri}\n\nThis will update both the database and .env file.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/dashboard/api/dcr/redirect-uri', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({redirect_uri: newUri})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message || 'DCR redirect URI updated');
+                    // Reload the configuration
+                    loadDcrConfig();
+                    // Also reload env variables
+                    loadEnvVariables();
+                } else {
+                    showToast('Failed to update: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error updating DCR redirect URI:', error);
+                showToast('Error updating DCR redirect URI');
             }
         }
 
@@ -1483,6 +2064,67 @@ def create_dashboard_routes() -> List[Route]:
             logger.error(f"Error in query API: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    # API: Clear log file
+    async def api_clear_log(request):
+        """Clear a specific log file"""
+        log_name = request.path_params['log_name']
+        result = service.clear_log_file(log_name)
+        return JSONResponse(result)
+
+    # API: Clear all logs
+    async def api_clear_all_logs(request):
+        """Clear all log files"""
+        result = service.clear_all_logs()
+        return JSONResponse(result)
+
+    # API: Clear database
+    async def api_clear_database(request):
+        """Clear all data from database"""
+        try:
+            data = await request.json()
+            db_path = data.get('db_path')
+            if not db_path:
+                return JSONResponse({"error": "db_path required"}, status_code=400)
+            result = service.clear_database(db_path)
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error(f"Error clearing database: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # API: Reset database
+    async def api_reset_database(request):
+        """Completely reset database (drop all tables)"""
+        try:
+            data = await request.json()
+            db_path = data.get('db_path')
+            if not db_path:
+                return JSONResponse({"error": "db_path required"}, status_code=400)
+            result = service.reset_database(db_path)
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error(f"Error resetting database: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # API: Get DCR configuration
+    async def api_get_dcr_config(request):
+        """Get current DCR configuration"""
+        result = service.get_dcr_config()
+        return JSONResponse(result)
+
+    # API: Update DCR redirect URI
+    async def api_update_dcr_redirect_uri(request):
+        """Update DCR redirect URI"""
+        try:
+            data = await request.json()
+            new_redirect_uri = data.get('redirect_uri')
+            if not new_redirect_uri:
+                return JSONResponse({"error": "redirect_uri required"}, status_code=400)
+            result = service.update_dcr_redirect_uri(new_redirect_uri)
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error(f"Error updating DCR redirect URI: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     return [
         Route("/dashboard", endpoint=dashboard_page, methods=["GET"]),
         Route("/dashboard/api/status", endpoint=api_status, methods=["GET"]),
@@ -1499,4 +2141,10 @@ def create_dashboard_routes() -> List[Route]:
         Route("/dashboard/api/db/tables", endpoint=api_db_tables, methods=["GET"]),
         Route("/dashboard/api/db/schema", endpoint=api_table_schema, methods=["GET"]),
         Route("/dashboard/api/db/query", endpoint=api_query_db, methods=["POST"]),
+        Route("/dashboard/api/logs/{log_name:path}/clear", endpoint=api_clear_log, methods=["POST"]),
+        Route("/dashboard/api/logs/clear-all", endpoint=api_clear_all_logs, methods=["POST"]),
+        Route("/dashboard/api/db/clear", endpoint=api_clear_database, methods=["POST"]),
+        Route("/dashboard/api/db/reset", endpoint=api_reset_database, methods=["POST"]),
+        Route("/dashboard/api/dcr/config", endpoint=api_get_dcr_config, methods=["GET"]),
+        Route("/dashboard/api/dcr/redirect-uri", endpoint=api_update_dcr_redirect_uri, methods=["POST"]),
     ]
