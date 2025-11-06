@@ -48,9 +48,11 @@ from modules.enrollment.auth import get_auth_orchestrator
 from modules.enrollment.auth.auth_callback_processor import AuthCallbackProcessor
 from infra.core.logger import get_logger
 from infra.core.config import get_config
+from infra.core.request_logger import get_request_logger
 from infra.utils.datetime_utils import utc_now, parse_iso_to_utc
 from modules.dcr_oauth import DCRService
 from modules.web_dashboard import create_dashboard_routes
+import time
 
 logger = get_logger(__name__)
 config = get_config()
@@ -101,6 +103,9 @@ class UnifiedMCPServer:
             logger.info("✅ DCR Azure config sync completed")
         except Exception as e:
             logger.warning(f"⚠️ DCR Azure config sync skipped due to error: {e}")
+
+        # Initialize request logger
+        self.request_logger = get_request_logger()
 
         # Create unified Starlette app
         self.app = self._create_unified_app()
@@ -1484,6 +1489,86 @@ Error: {error_details}</pre>
                 return await call_next(request)
 
         app.add_middleware(HeaderLoggingMiddleware)
+
+        # 요청/응답 로깅 미들웨어 (DB 저장)
+        class RequestLoggingMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                start_time = time.time()
+                request_body = None
+                response_body = None
+                response_status = None
+                error_message = None
+                user_id = None
+
+                # 요청 본문 읽기 (POST 요청만)
+                if request.method == "POST":
+                    try:
+                        body_bytes = await request.body()
+                        if body_bytes:
+                            request_body = json.loads(body_bytes.decode())
+                            # 요청 본문을 다시 사용할 수 있도록 재설정
+                            async def receive():
+                                return {"type": "http.request", "body": body_bytes}
+                            request._receive = receive
+                    except Exception as e:
+                        logger.debug(f"요청 본문 읽기 실패: {e}")
+
+                # user_id 추출 (헤더 또는 요청 본문에서)
+                user_id = request.headers.get("X-User-Id")
+                if not user_id and request_body:
+                    user_id = request_body.get("user_id")
+
+                try:
+                    # 응답 처리
+                    response = await call_next(request)
+                    response_status = response.status_code
+
+                    # 응답 본문 읽기 (JSON 응답만)
+                    if response.headers.get("content-type", "").startswith("application/json"):
+                        try:
+                            response_body_bytes = b""
+                            async for chunk in response.body_iterator:
+                                response_body_bytes += chunk
+
+                            if response_body_bytes:
+                                response_body = json.loads(response_body_bytes.decode())
+
+                            # 응답을 다시 생성
+                            from starlette.responses import Response
+                            response = Response(
+                                content=response_body_bytes,
+                                status_code=response.status_code,
+                                headers=dict(response.headers),
+                                media_type=response.media_type
+                            )
+                        except Exception as e:
+                            logger.debug(f"응답 본문 읽기 실패: {e}")
+
+                except Exception as e:
+                    error_message = str(e)
+                    response_status = 500
+                    response = JSONResponse({"error": str(e)}, status_code=500)
+
+                # 처리 시간 계산
+                duration_ms = int((time.time() - start_time) * 1000)
+
+                # DB에 로그 저장
+                self.request_logger.log_request(
+                    method=request.method,
+                    path=str(request.url.path),
+                    user_id=user_id,
+                    request_body=request_body,
+                    response_status=response_status,
+                    response_body=response_body,
+                    duration_ms=duration_ms,
+                    error_message=error_message
+                )
+
+                return response
+
+        # RequestLoggingMiddleware에 request_logger 전달
+        RequestLoggingMiddleware.request_logger = self.request_logger
+        app.add_middleware(RequestLoggingMiddleware)
 
         logger.info("=" * 80)
         if enable_oauth:

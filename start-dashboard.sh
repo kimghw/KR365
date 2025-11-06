@@ -92,7 +92,7 @@ show_status() {
 }
 
 # Main script
-case "${1:-}" in
+case "${1:-start}" in
     start)
         start_server
         ;;
