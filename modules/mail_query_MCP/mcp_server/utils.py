@@ -74,6 +74,6 @@ def preprocess_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     # Set default query_context if not provided
     if "query_context" not in arguments:
-        arguments["query_context"] = {"is_first_query": True, "conversation_turn": 1}
+        arguments["query_context"] = {"is_first_query": "yes", "conversation_turn": 1}
 
     return arguments

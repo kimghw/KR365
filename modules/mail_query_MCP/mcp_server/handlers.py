@@ -171,8 +171,8 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                             "description": "User ID (OPTIONAL - automatically uses authenticated user's ID from session if not provided. Only specify to query a different user's mailbox)",
                         },
                         "use_recent_account": {
-                            "type": "boolean",
-                            "description": "If true, automatically selects the most recently used account (based on last_used_at field). Set to true when you don't have a specific user_id and want to use the last active account. If false (default), user_id is required.",
+                            "type": "string",
+                            "description": "If 'yes', automatically selects the most recently used account (based on last_used_at field). Set to 'yes' when you don't have a specific user_id and want to use the last active account. If 'no' (default), user_id is required.",
                         },
                         "days_back": {
                             "type": "integer",
@@ -269,8 +269,8 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                             "description": "Query context information for handling multi-turn conversations",
                             "properties": {
                                 "is_first_query": {
-                                    "type": "boolean",
-                                    "description": "Whether this is the first query in the conversation. When true, all required fields must be provided. When false, missing fields may use previous values"
+                                    "type": "string",
+                                    "description": "Whether this is the first query in the conversation. When 'yes', all required fields must be provided. When 'no', missing fields may use previous values"
                                 },
                                 "conversation_turn": {
                                     "type": "integer",

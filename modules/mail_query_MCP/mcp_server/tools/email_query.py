@@ -101,7 +101,9 @@ class EmailQueryTool:
         from datetime import datetime, timezone
 
         user_id = arguments.get("user_id")
-        use_recent_account = arguments.get("use_recent_account", False)
+        # Convert string to boolean for use_recent_account
+        use_recent_account_str = arguments.get("use_recent_account", "no")
+        use_recent_account = use_recent_account_str in ["yes", "true", True]
 
         # Case 1: user_id 제공
         if user_id:

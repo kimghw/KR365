@@ -25,7 +25,7 @@ def get_query_email_help() -> str:
   • end_date: 종료 날짜 (YYYY-MM-DD 형식)
   • include_body: 본문 포함 여부 (true/false)
   • query_context: 쿼리 컨텍스트 정보
-    - is_first_query: 첫 번째 쿼리인지 여부 (기본값: true)
+    - is_first_query: 첫 번째 쿼리인지 여부 (기본값: 'yes')
     - conversation_turn: 대화 턴 번호 (기본값: 1)
 
 📝 예제 1: 최소한의 파라미터로 조회 (본문 포함)
@@ -35,7 +35,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "include_body": true,
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -54,7 +54,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "include_body": false,
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -83,7 +83,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "max_mails": 50,
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -95,7 +95,7 @@ def get_query_email_help() -> str:
   "start_date": "2025-10-10",
   "end_date": "2025-10-17",
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -125,7 +125,7 @@ def get_query_email_help() -> str:
   "include_body": false,
   "save_emails": false,
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -145,7 +145,7 @@ def get_query_email_help() -> str:
   "save_emails": true,
   "save_csv": true,
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -177,7 +177,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "sender_address": "boss@krs.co.kr",
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -194,7 +194,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "recipient_address": "team@krs.co.kr",
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -211,7 +211,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "conversation_with": ["partner@company.com"],
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -229,7 +229,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "subject_contains": "계약서",
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -246,7 +246,7 @@ def get_query_email_help() -> str:
   "end_date": "2025-10-17",
   "keyword": "프로젝트",
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -265,7 +265,7 @@ def get_query_email_help() -> str:
     "and_keywords": ["계약서", "2024"]
   },
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -284,7 +284,7 @@ def get_query_email_help() -> str:
     "not_keywords": ["취소", "반려"]
   },
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }
@@ -311,7 +311,7 @@ def get_query_email_help() -> str:
   "sender_address": "client@company.com",
   "subject_contains": "견적",
   "query_context": {
-    "is_first_query": true,
+    "is_first_query": "yes",
     "conversation_turn": 1
   }
 }

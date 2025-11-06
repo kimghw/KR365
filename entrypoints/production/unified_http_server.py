@@ -42,6 +42,7 @@ from infra.core.logger import get_logger
 from infra.core.config import get_config
 from infra.utils.datetime_utils import utc_now, parse_iso_to_utc
 from modules.dcr_oauth import DCRService
+from modules.web_dashboard import create_dashboard_routes
 
 logger = get_logger(__name__)
 config = get_config()
@@ -1419,6 +1420,9 @@ Error: {error_details}</pre>
         # Root does NOT expose OpenAI endpoints
         # Each MCP server exposes its own /v1/chat/completions and /v1/models at their subpath
 
+        # Create dashboard routes
+        dashboard_routes = create_dashboard_routes()
+
         # Create routes
         routes = [
             # Unified endpoints
@@ -1450,6 +1454,9 @@ Error: {error_details}</pre>
             Mount("/onedrive/", app=self.onedrive_server.app),
             Mount("/teams/", app=self.teams_server.app),
         ]
+
+        # Add dashboard routes
+        routes.extend(dashboard_routes)
 
         # Create Starlette app
         app = Starlette(routes=routes)

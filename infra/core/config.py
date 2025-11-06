@@ -193,6 +193,15 @@ class Config:
     @property
     def oauth_redirect_uri(self) -> str:
         """OAuth 리다이렉트 URI"""
+        # DCR_OAUTH_REDIRECT_URI 환경변수가 있으면 사용, 없으면 기본값 생성
+        dcr_redirect_uri = os.getenv("DCR_OAUTH_REDIRECT_URI")
+        if dcr_redirect_uri:
+            return dcr_redirect_uri
+        # AUTO_REGISTER_OAUTH_REDIRECT_URI도 확인
+        auto_redirect_uri = os.getenv("AUTO_REGISTER_OAUTH_REDIRECT_URI")
+        if auto_redirect_uri:
+            return auto_redirect_uri
+        # 둘 다 없으면 기본값 (레거시 호환성)
         return f"http://localhost:{self.oauth_redirect_port}{self.oauth_redirect_path}"
 
     # 애플리케이션 설정
