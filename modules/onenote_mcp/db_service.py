@@ -392,3 +392,55 @@ class OneNoteDBService:
         except Exception as e:
             logger.error(f"❌ 최근 페이지 조회 실패: {str(e)}")
             return None if limit == 1 else []
+
+    # ========================================================================
+    # 삭제 관리
+    # ========================================================================
+
+    def delete_section(self, user_id: str, section_id: str) -> bool:
+        """
+        섹션 삭제
+
+        Args:
+            user_id: 사용자 ID
+            section_id: 섹션 ID
+
+        Returns:
+            성공 여부
+        """
+        try:
+            self.db.execute_query("""
+                DELETE FROM onenote_sections
+                WHERE user_id = ? AND section_id = ?
+            """, (user_id, section_id))
+
+            logger.info(f"✅ 섹션 삭제 완료: {section_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ 섹션 삭제 실패: {str(e)}")
+            return False
+
+    def delete_page(self, user_id: str, page_id: str) -> bool:
+        """
+        페이지 삭제
+
+        Args:
+            user_id: 사용자 ID
+            page_id: 페이지 ID
+
+        Returns:
+            성공 여부
+        """
+        try:
+            self.db.execute_query("""
+                DELETE FROM onenote_pages
+                WHERE user_id = ? AND page_id = ?
+            """, (user_id, page_id))
+
+            logger.info(f"✅ 페이지 삭제 완료: {page_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ 페이지 삭제 실패: {str(e)}")
+            return False

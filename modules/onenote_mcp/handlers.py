@@ -137,8 +137,8 @@ class OneNoteHandlers:
                 }
             ),
             Tool(
-                name="onenote_db_initialization",
-                description="OneNote 섹션 또는 페이지 정보를 데이터베이스에 초기화/저장합니다. API에서 조회한 데이터를 로컬 DB에 동기화할 때 사용합니다.",
+                name="sync_onenote_db",
+                description="OneNote API에서 최신 섹션/페이지 정보를 가져와 로컬 DB와 동기화합니다. 삭제되거나 변경된 항목을 자동으로 감지하여 DB를 업데이트합니다.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -146,29 +146,15 @@ class OneNoteHandlers:
                             "type": "string",
                             "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
                         },
-                        "section_id": {
-                            "type": "string",
-                            "description": "섹션 ID (섹션 저장 시 필수)"
+                        "sync_sections": {
+                            "type": "boolean",
+                            "description": "섹션 정보 동기화 여부 (기본값: true)",
+                            "default": True
                         },
-                        "section_name": {
-                            "type": "string",
-                            "description": "섹션 이름 (섹션 저장 시 필수)"
-                        },
-                        "notebook_id": {
-                            "type": "string",
-                            "description": "노트북 ID (섹션 저장 시 선택)"
-                        },
-                        "notebook_name": {
-                            "type": "string",
-                            "description": "노트북 이름 (섹션 저장 시 선택)"
-                        },
-                        "page_id": {
-                            "type": "string",
-                            "description": "페이지 ID (페이지 저장 시 필수)"
-                        },
-                        "page_title": {
-                            "type": "string",
-                            "description": "페이지 제목 (페이지 저장 시 필수)"
+                        "sync_pages": {
+                            "type": "boolean",
+                            "description": "페이지 정보 동기화 여부 (기본값: true)",
+                            "default": True
                         }
                     },
                     "required": []
@@ -279,6 +265,7 @@ class OneNoteHandlers:
                     else:
                         logger.info(f"📌 DB에서 섹션 {len(db_sections)}개 조회")
                         result = await self.onenote_handler.list_sections(user_id)
+                        sections = result.get("sections", [])
 
                         # section_name 필터링
                         if filter_section_name:
@@ -346,6 +333,7 @@ class OneNoteHandlers:
                     else:
                         logger.info(f"📌 DB에서 페이지 {len(db_pages)}개 조회")
                         result = await self.onenote_handler.list_pages(user_id, section_id)
+                        pages = result.get("pages", [])
 
                         # page_title 필터링
                         if page_title_filter:
@@ -485,52 +473,138 @@ class OneNoteHandlers:
                 response = UpdatePageResponse(**result)
                 return [TextContent(type="text", text=response.model_dump_json(indent=2))]
 
-            elif name == "onenote_db_initialization":
+            elif name == "sync_onenote_db":
                 user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
-                section_id = arguments.get("section_id")
-                section_name = arguments.get("section_name")
-                notebook_id = arguments.get("notebook_id")
-                notebook_name = arguments.get("notebook_name")
-                page_id = arguments.get("page_id")
-                page_title = arguments.get("page_title")
+                sync_sections = arguments.get("sync_sections", True)
+                sync_pages = arguments.get("sync_pages", True)
 
                 results = []
+                stats = {
+                    "sections_added": 0,
+                    "sections_updated": 0,
+                    "sections_deleted": 0,
+                    "pages_added": 0,
+                    "pages_updated": 0,
+                    "pages_deleted": 0
+                }
 
-                # 섹션 정보 저장
-                if section_id and section_name:
-                    section_id = self.onenote_handler._normalize_onenote_id(section_id)
-                    if notebook_id:
-                        notebook_id = self.onenote_handler._normalize_onenote_id(notebook_id)
+                # 섹션 동기화
+                if sync_sections:
+                    logger.info("🔄 섹션 동기화 시작...")
+                    sections_result = await self.onenote_handler.list_sections(user_id)
 
-                    success = self.db_service.save_section(
-                        user_id, notebook_id or "", section_id, section_name,
-                        notebook_name=notebook_name,
-                        update_accessed=True
-                    )
-                    results.append({
-                        "type": "section",
-                        "success": success,
-                        "message": f"섹션 정보 저장: {section_name}" if success else "섹션 저장 실패"
-                    })
+                    if sections_result.get("success") and sections_result.get("sections"):
+                        api_sections = sections_result["sections"]
+                        api_section_ids = set()
 
-                # 페이지 정보 저장
-                if page_id and page_title:
-                    page_id = self.onenote_handler._normalize_onenote_id(page_id)
-                    if section_id:
-                        section_id = self.onenote_handler._normalize_onenote_id(section_id)
+                        # API에서 가져온 섹션 저장/업데이트
+                        for section in api_sections:
+                            section_id = section.get("id")
+                            section_name = section.get("displayName") or section.get("name")
+                            parent_notebook = section.get("parentNotebook", {})
+                            notebook_id = parent_notebook.get("id", "")
+                            notebook_name = parent_notebook.get("displayName", "")
 
-                    success = self.db_service.save_page(
-                        user_id, section_id or "", page_id, page_title,
-                        update_accessed=True
-                    )
-                    results.append({
-                        "type": "page",
-                        "success": success,
-                        "message": f"페이지 정보 저장: {page_title}" if success else "페이지 저장 실패"
-                    })
+                            if section_id and section_name:
+                                api_section_ids.add(section_id)
+
+                                # 기존 DB에 있는지 확인
+                                existing = self.db_service.get_section(user_id, section_name)
+
+                                self.db_service.save_section(
+                                    user_id, notebook_id, section_id, section_name,
+                                    notebook_name=notebook_name,
+                                    update_accessed=False  # 동기화는 accessed 시간 변경 안함
+                                )
+
+                                if existing:
+                                    stats["sections_updated"] += 1
+                                    logger.info(f"✅ 섹션 업데이트: {section_name}")
+                                else:
+                                    stats["sections_added"] += 1
+                                    logger.info(f"✅ 섹션 추가: {section_name}")
+
+                        # DB에는 있지만 API에 없는 섹션 삭제 처리
+                        db_sections = self.db_service.list_sections(user_id)
+                        for db_section in db_sections:
+                            db_section_id = db_section.get("section_id")
+                            if db_section_id not in api_section_ids:
+                                section_name = db_section.get("section_name", "")
+                                self.db_service.delete_section(user_id, db_section_id)
+                                stats["sections_deleted"] += 1
+                                logger.info(f"🗑️ 섹션 삭제 (API에 없음): {section_name}")
+
+                        results.append({
+                            "type": "sections",
+                            "success": True,
+                            "message": f"섹션 동기화 완료 (추가: {stats['sections_added']}, 업데이트: {stats['sections_updated']}, 삭제: {stats['sections_deleted']})"
+                        })
+                    else:
+                        results.append({
+                            "type": "sections",
+                            "success": False,
+                            "message": "섹션 정보 조회 실패"
+                        })
+
+                # 페이지 동기화
+                if sync_pages:
+                    logger.info("🔄 페이지 동기화 시작...")
+                    pages_result = await self.onenote_handler.list_pages(user_id)
+
+                    if pages_result.get("success") and pages_result.get("pages"):
+                        api_pages = pages_result["pages"]
+                        api_page_ids = set()
+
+                        # API에서 가져온 페이지 저장/업데이트
+                        for page in api_pages:
+                            page_id = page.get("id")
+                            page_title = page.get("title")
+                            parent_section = page.get("parentSection", {})
+                            page_section_id = parent_section.get("id", "")
+
+                            if page_id and page_title and page_section_id:
+                                api_page_ids.add(page_id)
+
+                                # 기존 DB에 있는지 확인
+                                existing = self.db_service.get_page(user_id, page_title)
+
+                                self.db_service.save_page(
+                                    user_id, page_section_id, page_id, page_title,
+                                    update_accessed=False  # 동기화는 accessed 시간 변경 안함
+                                )
+
+                                if existing:
+                                    stats["pages_updated"] += 1
+                                    logger.info(f"✅ 페이지 업데이트: {page_title}")
+                                else:
+                                    stats["pages_added"] += 1
+                                    logger.info(f"✅ 페이지 추가: {page_title}")
+
+                        # DB에는 있지만 API에 없는 페이지 삭제 처리
+                        db_pages = self.db_service.list_pages(user_id)
+                        for db_page in db_pages:
+                            db_page_id = db_page.get("page_id")
+                            if db_page_id not in api_page_ids:
+                                page_title = db_page.get("page_title", "")
+                                self.db_service.delete_page(user_id, db_page_id)
+                                stats["pages_deleted"] += 1
+                                logger.info(f"🗑️ 페이지 삭제 (API에 없음): {page_title}")
+
+                        results.append({
+                            "type": "pages",
+                            "success": True,
+                            "message": f"페이지 동기화 완료 (추가: {stats['pages_added']}, 업데이트: {stats['pages_updated']}, 삭제: {stats['pages_deleted']})"
+                        })
+                    else:
+                        results.append({
+                            "type": "pages",
+                            "success": False,
+                            "message": "페이지 정보 조회 실패"
+                        })
 
                 result = {
                     "success": all(r["success"] for r in results) if results else False,
+                    "stats": stats,
                     "updates": results
                 }
                 return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
@@ -728,6 +802,7 @@ class OneNoteHandlers:
                     else:
                         logger.info(f"📌 DB에서 섹션 {len(db_sections)}개 조회")
                         result = await self.onenote_handler.list_sections(user_id)
+                        sections = result.get("sections", [])
 
                         if filter_section_name:
                             sections = [s for s in sections if filter_section_name.lower() in (s.get("displayName") or s.get("name") or "").lower()]
@@ -774,6 +849,7 @@ class OneNoteHandlers:
                     else:
                         logger.info(f"📌 DB에서 페이지 {len(db_pages)}개 조회")
                         result = await self.onenote_handler.list_pages(user_id, section_id)
+                        pages = result.get("pages", [])
 
                         if page_title_filter:
                             pages = [p for p in pages if page_title_filter.lower() in (p.get("title") or "").lower()]
@@ -822,52 +898,120 @@ class OneNoteHandlers:
                 )
                 return result
 
-            elif name == "onenote_db_initialization":
+            elif name == "sync_onenote_db":
                 user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
-                section_id = arguments.get("section_id")
-                section_name = arguments.get("section_name")
-                notebook_id = arguments.get("notebook_id")
-                notebook_name = arguments.get("notebook_name")
-                page_id = arguments.get("page_id")
-                page_title = arguments.get("page_title")
+                sync_sections = arguments.get("sync_sections", True)
+                sync_pages = arguments.get("sync_pages", True)
 
                 results = []
+                stats = {
+                    "sections_added": 0,
+                    "sections_updated": 0,
+                    "sections_deleted": 0,
+                    "pages_added": 0,
+                    "pages_updated": 0,
+                    "pages_deleted": 0
+                }
 
-                # 섹션 정보 저장
-                if section_id and section_name:
-                    section_id = self.onenote_handler._normalize_onenote_id(section_id)
-                    if notebook_id:
-                        notebook_id = self.onenote_handler._normalize_onenote_id(notebook_id)
+                # 섹션 동기화
+                if sync_sections:
+                    sections_result = await self.onenote_handler.list_sections(user_id)
 
-                    success = self.db_service.save_section(
-                        user_id, notebook_id or "", section_id, section_name,
-                        notebook_name=notebook_name,
-                        update_accessed=True
-                    )
-                    results.append({
-                        "type": "section",
-                        "success": success,
-                        "message": f"섹션 정보 저장: {section_name}" if success else "섹션 저장 실패"
-                    })
+                    if sections_result.get("success") and sections_result.get("sections"):
+                        api_sections = sections_result["sections"]
+                        api_section_ids = set()
 
-                # 페이지 정보 저장
-                if page_id and page_title:
-                    page_id = self.onenote_handler._normalize_onenote_id(page_id)
-                    if section_id:
-                        section_id = self.onenote_handler._normalize_onenote_id(section_id)
+                        for section in api_sections:
+                            section_id = section.get("id")
+                            section_name = section.get("displayName") or section.get("name")
+                            parent_notebook = section.get("parentNotebook", {})
+                            notebook_id = parent_notebook.get("id", "")
+                            notebook_name = parent_notebook.get("displayName", "")
 
-                    success = self.db_service.save_page(
-                        user_id, section_id or "", page_id, page_title,
-                        update_accessed=True
-                    )
-                    results.append({
-                        "type": "page",
-                        "success": success,
-                        "message": f"페이지 정보 저장: {page_title}" if success else "페이지 저장 실패"
-                    })
+                            if section_id and section_name:
+                                api_section_ids.add(section_id)
+                                existing = self.db_service.get_section(user_id, section_name)
+
+                                self.db_service.save_section(
+                                    user_id, notebook_id, section_id, section_name,
+                                    notebook_name=notebook_name,
+                                    update_accessed=False
+                                )
+
+                                if existing:
+                                    stats["sections_updated"] += 1
+                                else:
+                                    stats["sections_added"] += 1
+
+                        db_sections = self.db_service.list_sections(user_id)
+                        for db_section in db_sections:
+                            db_section_id = db_section.get("section_id")
+                            if db_section_id not in api_section_ids:
+                                self.db_service.delete_section(user_id, db_section_id)
+                                stats["sections_deleted"] += 1
+
+                        results.append({
+                            "type": "sections",
+                            "success": True,
+                            "message": f"섹션 동기화 완료 (추가: {stats['sections_added']}, 업데이트: {stats['sections_updated']}, 삭제: {stats['sections_deleted']})"
+                        })
+                    else:
+                        results.append({
+                            "type": "sections",
+                            "success": False,
+                            "message": "섹션 정보 조회 실패"
+                        })
+
+                # 페이지 동기화
+                if sync_pages:
+                    pages_result = await self.onenote_handler.list_pages(user_id)
+
+                    if pages_result.get("success") and pages_result.get("pages"):
+                        api_pages = pages_result["pages"]
+                        api_page_ids = set()
+
+                        for page in api_pages:
+                            page_id = page.get("id")
+                            page_title = page.get("title")
+                            parent_section = page.get("parentSection", {})
+                            page_section_id = parent_section.get("id", "")
+
+                            if page_id and page_title and page_section_id:
+                                api_page_ids.add(page_id)
+                                existing = self.db_service.get_page(user_id, page_title)
+
+                                self.db_service.save_page(
+                                    user_id, page_section_id, page_id, page_title,
+                                    update_accessed=False
+                                )
+
+                                if existing:
+                                    stats["pages_updated"] += 1
+                                else:
+                                    stats["pages_added"] += 1
+
+                        db_pages = self.db_service.list_pages(user_id)
+                        for db_page in db_pages:
+                            db_page_id = db_page.get("page_id")
+                            if db_page_id not in api_page_ids:
+                                self.db_service.delete_page(user_id, db_page_id)
+                                stats["pages_deleted"] += 1
+
+                        results.append({
+                            "type": "pages",
+                            "success": True,
+                            "message": f"페이지 동기화 완료 (추가: {stats['pages_added']}, 업데이트: {stats['pages_updated']}, 삭제: {stats['pages_deleted']})"
+                        })
+                    else:
+                        results.append({
+                            "type": "pages",
+                            "success": False,
+                            "message": "페이지 정보 조회 실패"
+                        })
 
                 return {
                     "success": all(r["success"] for r in results) if results else False,
+                    "stats": stats,
                     "updates": results
                 }
 
