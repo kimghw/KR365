@@ -8,6 +8,7 @@ from typing import Optional
 from starlette.responses import JSONResponse
 from modules.dcr_oauth import DCRService
 from infra.core.logger import get_logger
+from infra.core.logs_db import get_logs_db_service
 
 logger = get_logger(__name__)
 
@@ -71,12 +72,27 @@ async def verify_bearer_token_middleware(request, call_next=None):
         - None if authentication succeeds (token stored in request.state.azure_token)
         - JSONResponse with 401 if authentication fails
     """
+    # 로그 DB 서비스
+    logs_db = get_logs_db_service()
+
     # Skip authentication for certain paths
     path = request.url.path
+    method = request.method
 
     # OAuth 엔드포인트와 메타데이터는 인증 제외
     # .well-known은 경로 어디든 포함되면 제외 (MCP discovery 지원)
     if "/.well-known/" in path:
+        # 인증 제외 로그 기록
+        logs_db.log_dcr_middleware(
+            path=path,
+            method=method,
+            dcr_client_id=None,
+            azure_object_id=None,
+            user_id=None,
+            auth_result="skipped",
+            token_valid=False,
+            error_message="Discovery endpoint"
+        )
         return None  # Skip authentication for discovery endpoints
 
     # 특정 경로로 시작하면 제외
@@ -89,15 +105,46 @@ async def verify_bearer_token_middleware(request, call_next=None):
     ]
 
     if any(path.startswith(excluded) for excluded in excluded_path_prefixes):
+        # 인증 제외 로그 기록
+        logs_db.log_dcr_middleware(
+            path=path,
+            method=method,
+            dcr_client_id=None,
+            azure_object_id=None,
+            user_id=None,
+            auth_result="skipped",
+            token_valid=False,
+            error_message=f"Excluded path: {path}"
+        )
         return None  # Skip authentication
 
     # OPTIONS 요청은 인증 제외
     if request.method == "OPTIONS":
+        logs_db.log_dcr_middleware(
+            path=path,
+            method=method,
+            dcr_client_id=None,
+            azure_object_id=None,
+            user_id=None,
+            auth_result="skipped",
+            token_valid=False,
+            error_message="OPTIONS request"
+        )
         return None
 
     # GET/HEAD 요청은 인증 제외 (MCP Discovery)
     # Claude.ai가 초기에 토큰 없이 서버 정보를 확인함
     if request.method in ["GET", "HEAD"]:
+        logs_db.log_dcr_middleware(
+            path=path,
+            method=method,
+            dcr_client_id=None,
+            azure_object_id=None,
+            user_id=None,
+            auth_result="skipped",
+            token_valid=False,
+            error_message=f"{method} request - discovery"
+        )
         return None
 
     # Get Authorization header
@@ -109,6 +156,19 @@ async def verify_bearer_token_middleware(request, call_next=None):
     # Check Bearer token
     if not auth_header.startswith("Bearer "):
         logger.warning(f"⚠️ Missing Bearer token for path: {path}")
+
+        # 인증 실패 로그 기록
+        logs_db.log_dcr_middleware(
+            path=path,
+            method=method,
+            dcr_client_id=None,
+            azure_object_id=None,
+            user_id=None,
+            auth_result="failed",
+            token_valid=False,
+            error_message="Missing Bearer token"
+        )
+
         return JSONResponse(
             {
                 "jsonrpc": "2.0",
@@ -145,9 +205,33 @@ async def verify_bearer_token_middleware(request, call_next=None):
                 logger.warning(f"⚠️ DCR 인증 성공했으나 user_id 조회 실패: {token_data['azure_object_id']}")
                 request.state.user_id = None
 
+            # 인증 성공 로그 기록
+            logs_db.log_dcr_middleware(
+                path=path,
+                method=method,
+                dcr_client_id=token_data["dcr_client_id"],
+                azure_object_id=token_data["azure_object_id"],
+                user_id=user_id,
+                auth_result="success",
+                token_valid=True
+            )
+
             return None  # Authentication successful
         else:
             logger.warning(f"⚠️ Invalid Bearer token for path: {path}")
+
+            # 인증 실패 로그 기록
+            logs_db.log_dcr_middleware(
+                path=path,
+                method=method,
+                dcr_client_id=None,
+                azure_object_id=None,
+                user_id=None,
+                auth_result="failed",
+                token_valid=False,
+                error_message="Invalid token"
+            )
+
             return JSONResponse(
                 {
                     "jsonrpc": "2.0",
@@ -161,6 +245,19 @@ async def verify_bearer_token_middleware(request, call_next=None):
             )
     except Exception as e:
         logger.error(f"❌ Token verification failed: {str(e)}")
+
+        # 인증 실패 로그 기록
+        logs_db.log_dcr_middleware(
+            path=path,
+            method=method,
+            dcr_client_id=None,
+            azure_object_id=None,
+            user_id=None,
+            auth_result="failed",
+            token_valid=False,
+            error_message=str(e)
+        )
+
         return JSONResponse(
             {
                 "jsonrpc": "2.0",

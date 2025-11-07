@@ -151,6 +151,7 @@ class DatabaseManager:
 
         # 실행할 마이그레이션 파일 목록 (initial_schema.sql 제외)
         migration_files = [
+            "mail_query_schema.sql",
             "teams_schema.sql",
             "teams_add_topic_kr.sql",
             # 향후 추가 마이그레이션 파일을 여기에 추가

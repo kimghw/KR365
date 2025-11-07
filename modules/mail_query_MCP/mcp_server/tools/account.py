@@ -395,9 +395,9 @@ start_authentication tool을 사용하여 OAuth 인증을 진행하세요."""
             """
 
             if status_filter == "active":
-                query += " WHERE is_active = 1 AND status = 'active'"
+                query += " WHERE is_active = 1 AND LOWER(status) = 'active'"
             elif status_filter == "inactive":
-                query += " WHERE is_active = 0 OR status != 'active'"
+                query += " WHERE is_active = 0 OR LOWER(status) != 'active'"
 
             query += " ORDER BY user_id"
 

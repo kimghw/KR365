@@ -396,7 +396,7 @@ class MailQueryOrchestrator:
                 "execution_time_ms": response.execution_time_ms,
                 "has_error": False,
                 "error_message": None,
-                "created_at": datetime.utcnow(),
+                # created_at는 DB의 CURRENT_TIMESTAMP가 자동 처리
             }
 
             self.db.insert("query_logs", log_data)
@@ -422,7 +422,7 @@ class MailQueryOrchestrator:
                 "execution_time_ms": execution_time,
                 "has_error": True,
                 "error_message": error_message[:500],  # 길이 제한
-                "created_at": datetime.utcnow(),
+                # created_at는 DB의 CURRENT_TIMESTAMP가 자동 처리
             }
 
             self.db.insert("query_logs", log_data)
