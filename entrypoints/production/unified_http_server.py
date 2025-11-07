@@ -668,6 +668,7 @@ class UnifiedMCPServer:
 
                     # state를 JSON으로 인코딩 (Azure AD state로 전달)
                     import base64
+                    import json
                     encoded_state = base64.urlsafe_b64encode(
                         json.dumps(auth_state_data).encode()
                     ).decode()
@@ -1235,6 +1236,7 @@ class UnifiedMCPServer:
                 # Base64 디코딩 시도 (초기 등록 케이스)
                 try:
                     import base64
+                    import json
                     decoded_state = base64.urlsafe_b64decode(state.encode()).decode()
                     auth_state_data = json.loads(decoded_state)
 
@@ -1289,6 +1291,7 @@ class UnifiedMCPServer:
                     client_id, metadata_json = result
 
                     # metadata에서 redirect_uri와 scope 추출
+                    import json
                     metadata = json.loads(metadata_json) if metadata_json else {}
                     redirect_uri = metadata.get('redirect_uri', '')
                     scope = metadata.get('scope', 'Mail.Read User.Read')
@@ -1305,6 +1308,7 @@ class UnifiedMCPServer:
 
                         # DCR 클라이언트 등록 (azure_object_id는 나중에 업데이트)
                         import secrets
+                        import json
                         client_secret = secrets.token_urlsafe(32)
                         encrypted_secret = dcr_service.crypto.account_encrypt_sensitive_data(client_secret)
 
@@ -1312,17 +1316,14 @@ class UnifiedMCPServer:
                             """
                             INSERT INTO dcr_clients (
                                 dcr_client_id, dcr_client_secret, dcr_redirect_uris,
-                                azure_application_id, azure_tenant_id, azure_redirect_uri,
-                                created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                azure_application_id, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                             """,
                             (
                                 client_id,
                                 encrypted_secret,
                                 json.dumps([redirect_uri]),
                                 dcr_service.azure_application_id,
-                                dcr_service.azure_tenant_id,
-                                dcr_service.azure_redirect_uri,
                             ),
                         )
                         logger.info(f"✅ New DCR client created: {client_id}")
@@ -1332,6 +1333,7 @@ class UnifiedMCPServer:
 
                     # 초기 등록 시 authorization code 생성
                     import secrets
+                    import json
                     from datetime import timedelta
                     auth_code = secrets.token_urlsafe(32)
                     code_expiry = utc_now() + timedelta(minutes=10)
@@ -1787,9 +1789,11 @@ Error: {error_details}</pre>
 
                     return response
 
-            # MiddlewareLogger 전달
-            from infra.core.request_logger import get_middleware_logger
-            OAuth2Middleware.middleware_logger = get_middleware_logger()
+            # MiddlewareLogger는 현재 비활성화 상태
+            # TODO: RequestLogger가 활성화되면 아래 코드 활성화
+            # from infra.core.request_logger import get_middleware_logger
+            # OAuth2Middleware.middleware_logger = get_middleware_logger()
+            OAuth2Middleware.middleware_logger = None
 
             app.add_middleware(OAuth2Middleware)
             logger.info("🔐 OAuth 인증 미들웨어: 활성화됨 (ENABLE_OAUTH_AUTH=true)")
