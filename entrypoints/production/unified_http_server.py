@@ -646,12 +646,47 @@ class UnifiedMCPServer:
                 client = dcr_service.get_client(client_id)
 
                 if not client:
-                    # 클라이언트가 없으면 에러 반환 (OAuth 표준 동작)
-                    logger.error(f"❌ Client not found: {client_id}")
-                    return JSONResponse(
-                        {"error": "invalid_client", "error_description": f"Client {client_id} not found. Please register first."},
-                        status_code=401,
+                    # 클라이언트가 없으면 자동으로 Azure AD 인증 시작 (초기 등록)
+                    logger.info(f"🔄 Client not found: {client_id}, redirecting to Azure AD for initial registration")
+
+                    # Azure AD 인증 URL 생성 (등록 프로세스와 동일)
+                    azure_tenant_id = dcr_service.azure_tenant_id
+                    azure_application_id = dcr_service.azure_application_id
+                    azure_redirect_uri = dcr_service.azure_redirect_uri
+
+                    # state에 DCR client_id, redirect_uri, scope, PKCE 정보 저장
+                    auth_state_data = {
+                        "dcr_client_id": client_id,
+                        "dcr_redirect_uri": redirect_uri,
+                        "dcr_scope": scope,
+                        "dcr_state": state,
+                        "response_type": response_type,
+                    }
+                    if code_challenge:
+                        auth_state_data["code_challenge"] = code_challenge
+                        auth_state_data["code_challenge_method"] = code_challenge_method
+
+                    # state를 JSON으로 인코딩 (Azure AD state로 전달)
+                    import base64
+                    encoded_state = base64.urlsafe_b64encode(
+                        json.dumps(auth_state_data).encode()
+                    ).decode()
+
+                    # Azure AD 인증 URL로 리다이렉트
+                    azure_auth_url = (
+                        f"https://login.microsoftonline.com/{azure_tenant_id}/oauth2/v2.0/authorize?"
+                        f"client_id={azure_application_id}&"
+                        f"response_type=code&"
+                        f"redirect_uri={urllib.parse.quote(azure_redirect_uri)}&"
+                        f"response_mode=query&"
+                        f"scope={urllib.parse.quote(scope)}&"
+                        f"state={encoded_state}"
                     )
+
+                    logger.info(f"🔐 Redirecting to Azure AD for authorization: {azure_auth_url}")
+
+                    from starlette.responses import RedirectResponse
+                    return RedirectResponse(url=azure_auth_url, status_code=302)
 
                 # Redirect URI 검증
                 if redirect_uri not in client["dcr_redirect_uris"]:
@@ -1184,54 +1219,139 @@ class UnifiedMCPServer:
                         status_code=400,
                     )
 
-                # Extract internal auth code from state
-                if ":" in state:
-                    auth_code, original_state = state.split(":", 1)
-                else:
-                    auth_code = state
-                    original_state = None
-
-                # DCR 서비스에서 auth_code 검증 및 클라이언트 정보 조회
+                # DCR 서비스 초기화
                 dcr_service = DCRService()
 
-                # auth_code로부터 클라이언트 정보 조회 (V3 스키마)
-                query = """
-                SELECT dcr_client_id, metadata
-                FROM dcr_tokens
-                WHERE dcr_token_type = 'authorization_code'
-                  AND dcr_token_value = ?
-                  AND dcr_status = 'active'
-                  AND expires_at > datetime('now')
-                """
-                result = dcr_service._fetch_one(query, (auth_code,))
+                # state 디코딩 시도 (초기 등록 케이스 vs 기존 인증 케이스)
+                auth_code = None
+                original_state = None
+                client_id = None
+                redirect_uri = None
+                scope = None
+                code_challenge = None
+                code_challenge_method = None
+                is_initial_registration = False
 
-                if not result:
-                    logger.error(f"❌ Invalid auth_code: {auth_code}")
-                    return Response(
-                        """
-                        <!DOCTYPE html>
-                        <html>
-                        <head><title>Authentication Error</title></head>
-                        <body>
-                            <h1>❌ Authentication Failed</h1>
-                            <p>Invalid authorization code</p>
-                        </body>
-                        </html>
-                        """,
-                        media_type="text/html",
-                        status_code=400,
-                    )
+                # Base64 디코딩 시도 (초기 등록 케이스)
+                try:
+                    import base64
+                    decoded_state = base64.urlsafe_b64decode(state.encode()).decode()
+                    auth_state_data = json.loads(decoded_state)
 
-                client_id, metadata_json = result
+                    # 초기 등록 케이스: state에 dcr_client_id가 있음
+                    if "dcr_client_id" in auth_state_data:
+                        is_initial_registration = True
+                        client_id = auth_state_data["dcr_client_id"]
+                        redirect_uri = auth_state_data["dcr_redirect_uri"]
+                        scope = auth_state_data["dcr_scope"]
+                        original_state = auth_state_data.get("dcr_state")
+                        code_challenge = auth_state_data.get("code_challenge")
+                        code_challenge_method = auth_state_data.get("code_challenge_method")
 
-                # metadata에서 redirect_uri와 scope 추출
-                import json
-                metadata = json.loads(metadata_json) if metadata_json else {}
-                redirect_uri = metadata.get('redirect_uri', '')
-                scope = metadata.get('scope', 'Mail.Read User.Read')
+                        logger.info(f"🆕 Initial registration flow detected for client: {client_id}")
+                except Exception:
+                    # Base64 디코딩 실패 -> 기존 인증 케이스 (auth_code:state 형식)
+                    if ":" in state:
+                        auth_code, original_state = state.split(":", 1)
+                    else:
+                        auth_code = state
+                        original_state = None
 
-                # 클라이언트 정보로 Azure 토큰 교환
-                client = dcr_service.get_client(client_id)
+                # 기존 인증 케이스: auth_code로 클라이언트 정보 조회
+                if not is_initial_registration:
+                    query = """
+                    SELECT dcr_client_id, metadata
+                    FROM dcr_tokens
+                    WHERE dcr_token_type = 'authorization_code'
+                      AND dcr_token_value = ?
+                      AND dcr_status = 'active'
+                      AND expires_at > datetime('now')
+                    """
+                    result = dcr_service._fetch_one(query, (auth_code,))
+
+                    if not result:
+                        logger.error(f"❌ Invalid auth_code: {auth_code}")
+                        return Response(
+                            """
+                            <!DOCTYPE html>
+                            <html>
+                            <head><title>Authentication Error</title></head>
+                            <body>
+                                <h1>❌ Authentication Failed</h1>
+                                <p>Invalid authorization code</p>
+                            </body>
+                            </html>
+                            """,
+                            media_type="text/html",
+                            status_code=400,
+                        )
+
+                    client_id, metadata_json = result
+
+                    # metadata에서 redirect_uri와 scope 추출
+                    metadata = json.loads(metadata_json) if metadata_json else {}
+                    redirect_uri = metadata.get('redirect_uri', '')
+                    scope = metadata.get('scope', 'Mail.Read User.Read')
+                    code_challenge = metadata.get('code_challenge')
+                    code_challenge_method = metadata.get('code_challenge_method')
+
+                # 초기 등록 케이스: 먼저 클라이언트 확인/생성
+                if is_initial_registration:
+                    # 클라이언트가 이미 존재하는지 확인
+                    client = dcr_service.get_client(client_id)
+                    if not client:
+                        # 클라이언트 생성 (초기 등록)
+                        logger.info(f"🆕 Creating new DCR client: {client_id}")
+
+                        # DCR 클라이언트 등록 (azure_object_id는 나중에 업데이트)
+                        import secrets
+                        client_secret = secrets.token_urlsafe(32)
+                        encrypted_secret = dcr_service.crypto.account_encrypt_sensitive_data(client_secret)
+
+                        dcr_service._execute_query(
+                            """
+                            INSERT INTO dcr_clients (
+                                dcr_client_id, dcr_client_secret, dcr_redirect_uris,
+                                azure_application_id, azure_tenant_id, azure_redirect_uri,
+                                created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                            """,
+                            (
+                                client_id,
+                                encrypted_secret,
+                                json.dumps([redirect_uri]),
+                                dcr_service.azure_application_id,
+                                dcr_service.azure_tenant_id,
+                                dcr_service.azure_redirect_uri,
+                            ),
+                        )
+                        logger.info(f"✅ New DCR client created: {client_id}")
+
+                        # 클라이언트 정보 다시 조회
+                        client = dcr_service.get_client(client_id)
+
+                    # 초기 등록 시 authorization code 생성
+                    import secrets
+                    from datetime import timedelta
+                    auth_code = secrets.token_urlsafe(32)
+                    code_expiry = utc_now() + timedelta(minutes=10)
+
+                    # authorization code metadata 저장
+                    metadata = {
+                        "redirect_uri": redirect_uri,
+                        "state": original_state,
+                        "scope": scope,
+                    }
+                    if code_challenge:
+                        metadata["code_challenge"] = code_challenge
+                        metadata["code_challenge_method"] = code_challenge_method
+
+                    # authorization code는 나중에 azure_object_id와 함께 저장
+                    logger.info(f"🔑 Created authorization code for initial registration: {client_id}")
+                else:
+                    # 기존 인증 케이스: 클라이언트 정보로 Azure 토큰 교환
+                    client = dcr_service.get_client(client_id)
+
                 if not client:
                     logger.error(f"❌ Client not found: {client_id}")
                     return Response(
@@ -1370,15 +1490,35 @@ Error: {error_details}</pre>
                 else:
                     logger.info(f"✅ Azure token saved (account sync disabled) for object_id: {azure_object_id}")
 
-                # authorization code에 azure_object_id 업데이트 (토큰 교환 시 사용)
+                # authorization code 처리 (초기 등록 vs 기존 인증)
                 if azure_object_id:
-                    update_auth_code_query = """
-                    UPDATE dcr_tokens
-                    SET azure_object_id = ?
-                    WHERE dcr_token_value = ? AND dcr_token_type = 'authorization_code'
-                    """
-                    dcr_service._execute_query(update_auth_code_query, (azure_object_id, auth_code))
-                    logger.info(f"✅ Authorization code updated with object_id: {azure_object_id}")
+                    if is_initial_registration:
+                        # 초기 등록: authorization code를 새로 저장
+                        dcr_service._execute_query(
+                            """
+                            INSERT INTO dcr_tokens (
+                                dcr_token_value, dcr_client_id, dcr_token_type,
+                                azure_object_id, expires_at, dcr_status, metadata
+                            ) VALUES (?, ?, 'authorization_code', ?, ?, 'active', ?)
+                            """,
+                            (
+                                auth_code,
+                                client_id,
+                                azure_object_id,
+                                code_expiry,
+                                json.dumps(metadata)
+                            ),
+                        )
+                        logger.info(f"✅ Authorization code created for initial registration: {client_id}")
+                    else:
+                        # 기존 인증: authorization code에 azure_object_id 업데이트
+                        update_auth_code_query = """
+                        UPDATE dcr_tokens
+                        SET azure_object_id = ?
+                        WHERE dcr_token_value = ? AND dcr_token_type = 'authorization_code'
+                        """
+                        dcr_service._execute_query(update_auth_code_query, (azure_object_id, auth_code))
+                        logger.info(f"✅ Authorization code updated with object_id: {azure_object_id}")
 
                     # 클라이언트에 사용자 정보 연결 (중요!)
                     # redirect_uri 추출 (metadata에서 가져오기)
@@ -1573,15 +1713,83 @@ Error: {error_details}</pre>
         logger.info("=" * 80)
         if enable_oauth:
             from modules.dcr_oauth.auth_middleware import verify_bearer_token_middleware
+            import time
 
             class OAuth2Middleware(BaseHTTPMiddleware):
+                middleware_logger = None  # 클래스 변수로 저장
+
                 async def dispatch(self, request, call_next):
+                    start_time = time.time()
+                    request_body = None
+                    response_status = None
+                    response_body = None
+                    error_message = None
+
+                    # 요청 본문 읽기 (POST 요청만)
+                    if request.method == "POST":
+                        try:
+                            body_bytes = await request.body()
+                            if body_bytes:
+                                request_body = json.loads(body_bytes.decode())
+                                # 요청 본문을 다시 사용할 수 있도록 재설정
+                                async def receive():
+                                    return {"type": "http.request", "body": body_bytes}
+                                request._receive = receive
+                        except Exception as e:
+                            logger.debug(f"OAuth 미들웨어: 요청 본문 읽기 실패: {e}")
+
                     # 인증 검증
                     auth_response = await verify_bearer_token_middleware(request)
+
                     if auth_response:  # 인증 실패 시 에러 응답 반환
+                        response_status = auth_response.status_code
+                        try:
+                            response_body = json.loads(auth_response.body.decode())
+                        except:
+                            response_body = {"detail": "Authentication failed"}
+                        error_message = "OAuth authentication failed"
+
+                        # 미들웨어 로그 저장
+                        if self.middleware_logger:
+                            duration_ms = int((time.time() - start_time) * 1000)
+                            self.middleware_logger.log_request(
+                                method=request.method,
+                                path=str(request.url.path),
+                                headers=dict(request.headers),
+                                request_body=request_body,
+                                response_status=response_status,
+                                response_body=response_body,
+                                duration_ms=duration_ms,
+                                error_message=error_message,
+                                client_ip=request.headers.get("cf-connecting-ip") or request.client.host if request.client else None,
+                                user_agent=request.headers.get("user-agent")
+                            )
+
                         return auth_response
+
                     # 인증 성공 시 다음 핸들러로 진행
-                    return await call_next(request)
+                    response = await call_next(request)
+                    response_status = response.status_code
+
+                    # 미들웨어 로그 저장 (성공 케이스)
+                    if self.middleware_logger:
+                        duration_ms = int((time.time() - start_time) * 1000)
+                        self.middleware_logger.log_request(
+                            method=request.method,
+                            path=str(request.url.path),
+                            headers=dict(request.headers),
+                            request_body=request_body,
+                            response_status=response_status,
+                            duration_ms=duration_ms,
+                            client_ip=request.headers.get("cf-connecting-ip") or request.client.host if request.client else None,
+                            user_agent=request.headers.get("user-agent")
+                        )
+
+                    return response
+
+            # MiddlewareLogger 전달
+            from infra.core.request_logger import get_middleware_logger
+            OAuth2Middleware.middleware_logger = get_middleware_logger()
 
             app.add_middleware(OAuth2Middleware)
             logger.info("🔐 OAuth 인증 미들웨어: 활성화됨 (ENABLE_OAUTH_AUTH=true)")
