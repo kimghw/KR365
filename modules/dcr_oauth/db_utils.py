@@ -1,41 +1,14 @@
 """
-Database helper utilities for DCR OAuth module.
+Database helper utilities for DCR OAuth module - Redirects to new db_service module
 
-These helpers centralize simple SQLite operations so the service can
-delegate without duplicating boilerplate.
+This module now redirects to the new db_service module which provides:
+- Better connection management (connection pooling)
+- Thread-safe operations
+- WAL mode support
+- Improved error handling
 """
 
-from typing import Any, Iterable, Optional, Tuple
-import sqlite3
+# Import everything from new db_service for backward compatibility
+from .db_service import execute_query, fetch_one, fetch_all
 
-
-def execute_query(db_path: str, query: str, params: Tuple[Any, ...] = ()) -> int:
-    conn = sqlite3.connect(db_path)
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
-        return cursor.lastrowid
-    finally:
-        conn.close()
-
-
-def fetch_one(db_path: str, query: str, params: Tuple[Any, ...] = ()) -> Optional[Tuple[Any, ...]]:
-    conn = sqlite3.connect(db_path)
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        return cursor.fetchone()
-    finally:
-        conn.close()
-
-
-def fetch_all(db_path: str, query: str, params: Tuple[Any, ...] = ()) -> Iterable[Tuple[Any, ...]]:
-    conn = sqlite3.connect(db_path)
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        return cursor.fetchall()
-    finally:
-        conn.close()
-
+__all__ = ['execute_query', 'fetch_one', 'fetch_all']

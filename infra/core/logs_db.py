@@ -54,8 +54,14 @@ class LogsDBService:
         db_exists = os.path.exists(self.db_path)
 
         # DB 연결 (파일이 없으면 자동 생성됨)
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        # check_same_thread=False: 멀티스레드 환경(FastAPI 비동기)에서 안전하게 사용
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row  # Dict처럼 사용 가능
+
+        # WAL 모드 활성화 (동시성 향상 및 성능 개선)
+        conn.execute("PRAGMA journal_mode = WAL")
+        # 외래키 제약조건 활성화
+        conn.execute("PRAGMA foreign_keys = ON")
 
         # DB 파일이 새로 생성되었거나 비어있으면 테이블 초기화
         if not db_exists or os.path.getsize(self.db_path) == 0:

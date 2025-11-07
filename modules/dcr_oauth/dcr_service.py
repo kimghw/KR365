@@ -14,7 +14,7 @@ from typing import Dict, Optional, Any, Tuple
 from infra.core.database import get_database_manager
 from infra.core.logger import get_logger
 from modules.enrollment.account import AccountCryptoHelpers
-from . import db_utils
+from .db_service import DCRDatabaseService
 from .azure_config import (
     ensure_dcr_schema as _ensure_dcr_schema_helper,
     load_azure_config as _load_azure_config_helper,
@@ -43,6 +43,9 @@ class DCRService:
         self.db_path = self.config.dcr_database_path
         self.crypto = AccountCryptoHelpers()
 
+        # DCR 전용 데이터베이스 서비스 초기화
+        self.db_service = DCRDatabaseService()
+
         # 스키마 초기화 (가장 먼저 실행)
         self._ensure_dcr_schema()
 
@@ -65,17 +68,21 @@ class DCRService:
         else:
             logger.warning("⚠️ DCR access allowed for ALL Azure users")
 
-    def _execute_query(self, query: str, params: tuple = ()): 
-        """SQL 쿼리 실행 헬퍼 (위임)"""
-        return db_utils.execute_query(self.db_path, query, params)
+    def _execute_query(self, query: str, params: tuple = ()):
+        """SQL 쿼리 실행 헬퍼 (새로운 DB 서비스 사용)"""
+        return self.db_service.execute_query(query, params)
 
-    def _fetch_one(self, query: str, params: tuple = ()): 
-        """단일 행 조회 헬퍼 (위임)"""
-        return db_utils.fetch_one(self.db_path, query, params)
+    def _fetch_one(self, query: str, params: tuple = ()):
+        """단일 행 조회 헬퍼 (새로운 DB 서비스 사용)"""
+        result = self.db_service.fetch_one(query, params)
+        # Row 객체를 튜플로 변환 (하위 호환성)
+        return tuple(result) if result else None
 
-    def _fetch_all(self, query: str, params: tuple = ()): 
-        """여러 행 조회 헬퍼 (위임)"""
-        return db_utils.fetch_all(self.db_path, query, params)
+    def _fetch_all(self, query: str, params: tuple = ()):
+        """여러 행 조회 헬퍼 (새로운 DB 서비스 사용)"""
+        results = self.db_service.fetch_all(query, params)
+        # Row 객체들을 튜플로 변환 (하위 호환성)
+        return [tuple(row) for row in results]
 
     def _load_azure_config(self):
         """dcr_azure_app 테이블 또는 환경변수에서 Azure 설정 로드 (위임)"""
