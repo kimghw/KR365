@@ -176,7 +176,7 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                         },
                         "days_back": {
                             "type": "integer",
-                            "description": "Number of days to look back",
+                            "description": "**DEPRECATED - DO NOT USE**: Number of days to look back. This parameter is deprecated. Instead, you MUST calculate and provide start_date and end_date directly in YYYY-MM-DD format based on the user's request.",
                             "default": 30
                         },
                         "max_mails": {
@@ -210,11 +210,11 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
                         },
                         "start_date": {
                             "type": "string",
-                            "description": "Start date in YYYY-MM-DD format. When user says 'this week', calculate 7 days ago from today. When 'last month', calculate 30 days ago. When 'last 3 months', calculate 90 days ago.",
+                            "description": "**REQUIRED**: Start date in YYYY-MM-DD format. You MUST calculate this from user's request or days_back parameter. Examples: If user says 'last 3 days' or days_back=3, calculate today minus 3 days (e.g., if today is 2025-11-07, start_date='2025-11-04'). For 'this week', use 7 days ago. For 'last month', use 30 days ago. For 'last 3 months', use 90 days ago. Always calculate and provide this field.",
                         },
                         "end_date": {
                             "type": "string",
-                            "description": "End date in YYYY-MM-DD format. When user mentions a time period without specific end date, use today's date. For 'this week' or 'last month', end_date should be today.",
+                            "description": "**REQUIRED**: End date in YYYY-MM-DD format. You MUST calculate this - typically use today's date unless user specifies otherwise. Examples: If today is 2025-11-07, end_date='2025-11-07'. For any relative time period ('this week', 'last month', etc.), end_date should be today. Always calculate and provide this field.",
                         },
                         "sender_address": {
                             "type": "string",
