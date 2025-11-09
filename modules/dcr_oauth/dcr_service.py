@@ -281,7 +281,8 @@ class DCRService:
         dcr_client_id: str,
         azure_object_id: str,
         user_email: str,
-        redirect_uri: str
+        redirect_uri: str,
+        inferred_client_name: Optional[str] = None
     ) -> str:
         """로그인 완료 후 클라이언트에 사용자 정보를 연결
 
@@ -290,13 +291,16 @@ class DCRService:
             azure_object_id: Azure 사용자 Object ID
             user_email: 사용자 이메일
             redirect_uri: 클라이언트의 redirect URI
+            inferred_client_name: redirect_uri에서 추론된 클라이언트 이름
 
         Returns:
             사용할 client_id (기존 사용자 클라이언트가 있으면 그것, 없으면 현재 클라이언트)
         """
+        import json
+
         # 1. 현재 클라이언트 정보 조회
         current_client_query = """
-        SELECT dcr_client_name, azure_object_id
+        SELECT dcr_client_name, azure_object_id, dcr_redirect_uris, azure_application_id
         FROM dcr_clients
         WHERE dcr_client_id = ?
         """
@@ -307,25 +311,109 @@ class DCRService:
 
         current_client_name = current_client[0]
         current_object_id = current_client[1]
+        current_redirect_uris = json.loads(current_client[2]) if current_client[2] else []
+        current_azure_app_id = current_client[3]
 
-        # 이미 연결되어 있으면 바로 반환
-        if current_object_id == azure_object_id:
-            logger.info(f"✅ Client {dcr_client_id} already linked to user {user_email}")
+        # 이미 연결되어 있으면 (동일한 object_id + redirect_uri)
+        if current_object_id == azure_object_id and redirect_uri in current_redirect_uris:
+            # client_name이 다르면 업데이트
+            if inferred_client_name and current_client_name != inferred_client_name:
+                logger.info(f"🔄 Updating client_name: {current_client_name} -> {inferred_client_name}")
+                update_name_query = """
+                UPDATE dcr_clients
+                SET dcr_client_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE dcr_client_id = ?
+                """
+                self._execute_query(update_name_query, (inferred_client_name, dcr_client_id))
+                logger.info(f"✅ Client {dcr_client_id} name updated to {inferred_client_name}")
+            else:
+                logger.info(f"✅ Client {dcr_client_id} already linked to user {user_email}")
             return dcr_client_id
 
-        # 현재 클라이언트에 사용자 정보 업데이트 (클라이언트 재사용 로직 제거)
+        # 2. 같은 redirect_uri + object_id + azure_application_id로 기존 클라이언트 검색
+        # 가장 최근에 사용된 클라이언트를 우선 선택
+        existing_client_query = """
+        SELECT dcr_client_id, dcr_client_name, updated_at
+        FROM dcr_clients
+        WHERE azure_object_id = ?
+          AND azure_application_id = ?
+          AND json_each.value = ?
+        CROSS JOIN json_each(dcr_redirect_uris)
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """
+        existing_client = self._fetch_one(existing_client_query, (azure_object_id, current_azure_app_id, redirect_uri))
+
+        if existing_client:
+            existing_client_id = existing_client[0]
+            existing_client_name = existing_client[1]
+            existing_updated_at = existing_client[2]
+
+            logger.info(f"🔍 Found existing client {existing_client_id} (name: {existing_client_name}, last_used: {existing_updated_at}) for same redirect_uri + object_id")
+            logger.info(f"🔀 Merging temporary client {dcr_client_id} into existing client {existing_client_id}")
+
+            # client_name이 다르면 업데이트
+            if inferred_client_name and existing_client_name != inferred_client_name:
+                logger.info(f"🔄 Updating existing client_name: {existing_client_name} -> {inferred_client_name}")
+                update_name_query = """
+                UPDATE dcr_clients
+                SET dcr_client_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE dcr_client_id = ?
+                """
+                self._execute_query(update_name_query, (inferred_client_name, existing_client_id))
+                logger.info(f"✅ Client {existing_client_id} name updated to {inferred_client_name}")
+
+            # 기존 클라이언트의 updated_at을 갱신하여 최근 사용 표시
+            touch_query = """
+            UPDATE dcr_clients
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE dcr_client_id = ?
+            """
+            self._execute_query(touch_query, (existing_client_id,))
+
+            # 클라이언트 병합 로그 기록
+            merge_log = {
+                "action": "client_merge",
+                "temporary_client_id": dcr_client_id,
+                "existing_client_id": existing_client_id,
+                "user_email": user_email,
+                "azure_object_id": azure_object_id,
+                "redirect_uri": redirect_uri,
+                "reason": "duplicate_client_detected"
+            }
+            logger.info(f"📝 Client merge log: {json.dumps(merge_log)}")
+
+            # 임시 클라이언트 상태를 'merged'로 변경 (나중에 정리 배치에서 삭제 가능)
+            mark_merged_query = """
+            UPDATE dcr_clients
+            SET dcr_status = 'merged',
+                metadata = json_set(
+                    COALESCE(metadata, '{}'),
+                    '$.merged_to', ?,
+                    '$.merged_at', CURRENT_TIMESTAMP
+                ),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE dcr_client_id = ?
+            """
+            self._execute_query(mark_merged_query, (existing_client_id, dcr_client_id))
+            logger.info(f"✅ Marked temporary client {dcr_client_id} as merged into {existing_client_id}")
+
+            # 기존 클라이언트 사용
+            return existing_client_id
+
+        # 3. 새로운 연결: 현재 클라이언트에 사용자 정보 + client_name 업데이트
         update_query = """
         UPDATE dcr_clients
-        SET azure_object_id = ?, user_email = ?, updated_at = CURRENT_TIMESTAMP
+        SET azure_object_id = ?, user_email = ?, dcr_client_name = ?, updated_at = CURRENT_TIMESTAMP
         WHERE dcr_client_id = ?
         """
 
         self._execute_query(
             update_query,
-            (azure_object_id, user_email, dcr_client_id)
+            (azure_object_id, user_email, inferred_client_name or current_client_name, dcr_client_id)
         )
 
-        logger.info(f"✅ Linked client {dcr_client_id} to user {user_email} (object_id: {azure_object_id})")
+        logger.info(f"✅ Linked client {dcr_client_id} to user {user_email} (object_id: {azure_object_id}, name: {inferred_client_name or current_client_name})")
 
         return dcr_client_id
 
@@ -934,3 +1022,95 @@ class DCRService:
     def _verify_pkce(self, code_verifier: str, code_challenge: str, method: str = "plain") -> bool:
         """PKCE 검증 (위임)"""
         return _verify_pkce_helper(code_verifier, code_challenge, method)
+
+    def cleanup_stale_clients(self, hours: int = 24) -> int:
+        """오래된 미사용 클라이언트 및 병합된 클라이언트 정리
+
+        Args:
+            hours: 정리 대상 시간 (기본값: 24시간)
+
+        Returns:
+            정리된 클라이언트 수
+        """
+        try:
+            # 1. merged 상태인 클라이언트 삭제
+            merged_cleanup_query = """
+            DELETE FROM dcr_clients
+            WHERE dcr_status = 'merged'
+              AND datetime(updated_at) < datetime('now', ? || ' hours')
+            """
+
+            # 2. 생성되었지만 한 번도 사용되지 않은 클라이언트 삭제
+            # (azure_object_id가 NULL이고 오래된 클라이언트)
+            unused_cleanup_query = """
+            DELETE FROM dcr_clients
+            WHERE azure_object_id IS NULL
+              AND dcr_status = 'active'
+              AND datetime(created_at) < datetime('now', ? || ' hours')
+              AND dcr_client_id NOT IN (
+                  SELECT DISTINCT dcr_client_id
+                  FROM dcr_tokens
+                  WHERE dcr_status = 'active'
+              )
+            """
+
+            # 3. 만료된 토큰 정리
+            expired_tokens_query = """
+            UPDATE dcr_tokens
+            SET dcr_status = 'expired'
+            WHERE dcr_status = 'active'
+              AND datetime(expires_at) < datetime('now')
+            """
+
+            # 실행 - execute_query는 영향받은 행 수를 반환
+            merged_count = self._execute_query(merged_cleanup_query, (f'-{hours}',))
+            unused_count = self._execute_query(unused_cleanup_query, (f'-{hours}',))
+            expired_count = self._execute_query(expired_tokens_query)
+
+            total_cleaned = merged_count + unused_count
+
+            logger.info(f"🧹 Cleanup completed: {total_cleaned} clients removed, {expired_count} tokens expired")
+
+            return total_cleaned
+
+        except Exception as e:
+            logger.error(f"❌ Cleanup failed: {e}")
+            return 0
+
+    def get_client_merge_history(self, client_id: str) -> list:
+        """특정 클라이언트의 병합 이력 조회
+
+        Args:
+            client_id: 조회할 클라이언트 ID
+
+        Returns:
+            병합 이력 리스트
+        """
+        try:
+            query = """
+            SELECT dcr_client_id, dcr_status, metadata, updated_at
+            FROM dcr_clients
+            WHERE dcr_status = 'merged'
+              AND json_extract(metadata, '$.merged_to') = ?
+            ORDER BY updated_at DESC
+            """
+
+            results = self._fetch_all(query, (client_id,))
+
+            history = []
+            for row in results:
+                merged_client_id, status, metadata_str, updated_at = row
+                metadata = json.loads(metadata_str) if metadata_str else {}
+
+                history.append({
+                    "merged_client_id": merged_client_id,
+                    "status": status,
+                    "merged_at": metadata.get("merged_at"),
+                    "updated_at": updated_at
+                })
+
+            return history
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get merge history: {e}")
+            return []

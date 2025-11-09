@@ -1438,7 +1438,7 @@ Error: {error_details}</pre>
                     # 사용자 정보 추출
                     user_email = "unknown"
                     user_name = None
-                    principal_id = None
+                    azure_object_id = None  # Azure AD User Object ID 초기화
 
                     if user_info_response.status_code == 200:
                         user_info = user_info_response.json()
@@ -1522,13 +1522,31 @@ Error: {error_details}</pre>
                         dcr_service._execute_query(update_auth_code_query, (azure_object_id, auth_code))
                         logger.info(f"✅ Authorization code updated with object_id: {azure_object_id}")
 
+                    # redirect_uri에서 client_name 추론
+                    inferred_client_name = None
+                    if "chatgpt.com" in redirect_uri.lower():
+                        inferred_client_name = "ChatGPT"
+                    elif "claude.ai" in redirect_uri.lower():
+                        inferred_client_name = "Claude"
+                    else:
+                        # 도메인 추출 (https://example.com/path -> example.com)
+                        import re
+                        domain_match = re.search(r'https?://([^/]+)', redirect_uri)
+                        if domain_match:
+                            domain = domain_match.group(1)
+                            # www. 제거
+                            inferred_client_name = domain.replace("www.", "").split(".")[0].capitalize()
+
+                    logger.info(f"🔍 Inferred client_name: {inferred_client_name} from redirect_uri: {redirect_uri}")
+
                     # 클라이언트에 사용자 정보 연결 (중요!)
                     # redirect_uri 추출 (metadata에서 가져오기)
                     final_client_id = dcr_service.update_client_user(
                         dcr_client_id=client_id,
                         azure_object_id=azure_object_id,
                         user_email=user_email,
-                        redirect_uri=redirect_uri
+                        redirect_uri=redirect_uri,
+                        inferred_client_name=inferred_client_name
                     )
 
                     # 만약 기존 클라이언트로 교체되었다면, auth_code의 client_id도 업데이트

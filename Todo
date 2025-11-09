@@ -21,3 +21,67 @@
         - 테이블에서는 대화내용 관리 안함
         - 대화방 삭제된 경우 이력 관리(삭제된 대화방 표시)
         - 기존 도구를 사용하고 도구의 스키마를 변경하여 도구를 필요 이상으로 늘리지 않도록
+
+## 데이터베이스 관련 개선사항 (2024-11-07)
+
+### ✅ 완료된 작업
+[x] LogsDBService에 check_same_thread=False 추가
+    - 멀티스레드 환경 안전성 확보
+    - WAL 모드 활성화로 성능 개선
+
+[x] DCR OAuth를 DatabaseManager로 마이그레이션
+    - 새로운 DCRDatabaseService 클래스 생성
+    - 연결 풀링으로 성능 개선
+    - 하위 호환성 유지 (db_utils.py → db_service.py 리다이렉트)
+
+### 📋 중기 개선사항
+
+[ ] 공통 Context Manager 도입
+    - LogsDBService의 반복적인 try/finally 제거
+    - 코드 중복 감소를 위한 공통 패턴 구현
+    - 위치: infra/core/db_utils.py 생성 고려
+
+[ ] 타임스탬프 생성 유틸리티 통일
+    - get_utc_timestamp() 공통 함수 생성
+    - 여러 모듈에서 중복되는 datetime 코드 제거
+    - 영향 받는 파일:
+      - modules/teams_mcp/teams_db_manager.py
+      - infra/core/logs_db.py
+
+[ ] 에러 처리 전략 통일
+    - 문서화된 에러 핸들링 가이드라인 작성
+    - 예외 vs 반환값 전략 명확화
+    - 현재 상황:
+      - logs_db.py: Bool 반환
+      - db_service.py: 예외 재발생
+      - teams_db_manager.py: None 반환
+
+### 📋 장기 개선사항
+
+[ ] 타입 힌트 개선
+    - 전체 프로젝트 타입 힌트 보완
+    - mypy 또는 pyright 도입 고려
+    - 우선 대상:
+      - modules/dcr_oauth/ 모듈
+      - infra/core/ 핵심 모듈
+
+[ ] 로깅 메시지 표준화
+    - 로그 포맷 가이드라인 작성
+    - 일관된 로그 레벨 사용
+    - 이모지 사용 규칙 정립
+
+[ ] 테스트 코드 추가
+    - 각 DB 서비스의 단위 테스트
+    - 통합 테스트 추가
+    - CI/CD 파이프라인 구축 고려
+
+### 기타 발견된 이슈
+
+[ ] 환경변수 관련
+    - ENCRYPTION_KEY 설정 필요 (.env 파일)
+    - .env.example 파일 업데이트
+
+[ ] 성능 최적화 기회
+    - 인덱스 추가 검토
+    - 쿼리 최적화
+    - 캐싱 전략 수립

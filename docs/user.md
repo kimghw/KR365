@@ -157,10 +157,6 @@ INSERT OR REPLACE INTO dcr_azure_users (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ```
 
-**`INSERT OR REPLACE` 의미:**
-- `object_id`가 없으면 → INSERT (새 레코드 추가)
-- `object_id`가 있으면 → REPLACE (기존 레코드 덮어쓰기)
-
 ---
 
 ## 시나리오별 동작
