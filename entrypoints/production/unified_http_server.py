@@ -646,17 +646,39 @@ class UnifiedMCPServer:
                 client = dcr_service.get_client(client_id)
 
                 if not client:
-                    # 클라이언트가 없으면 자동으로 Azure AD 인증 시작 (초기 등록)
-                    logger.info(f"🔄 Client not found: {client_id}, redirecting to Azure AD for initial registration")
+                    # 클라이언트가 없으면 자동으로 등록 후 Azure AD 인증 시작
+                    logger.info(f"🔄 Client not found: {client_id}, auto-registering and redirecting to Azure AD")
 
-                    # Azure AD 인증 URL 생성 (등록 프로세스와 동일)
+                    # 자동으로 새 클라이언트 등록
+                    import asyncio
+                    registration_data = {
+                        "client_name": "Auto-registered Client",
+                        "redirect_uris": [redirect_uri],
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "scope": scope
+                    }
+
+                    # register_client 호출 (동기화 처리)
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 이미 실행 중인 루프가 있으면 직접 호출
+                        new_client = await dcr_service.register_client(registration_data, mcp_session_id=None)
+                    else:
+                        # 루프가 없으면 새로 실행
+                        new_client = loop.run_until_complete(dcr_service.register_client(registration_data, mcp_session_id=None))
+
+                    # 새로 생성된 client_id 사용
+                    actual_client_id = new_client["client_id"]
+                    logger.info(f"✅ Auto-registered new client: {actual_client_id} (requested was: {client_id})")
+
+                    # Azure AD 인증 URL 생성
                     azure_tenant_id = dcr_service.azure_tenant_id
                     azure_application_id = dcr_service.azure_application_id
                     azure_redirect_uri = dcr_service.azure_redirect_uri
 
-                    # state에 DCR client_id, redirect_uri, scope, PKCE 정보 저장
+                    # state에 실제 DCR client_id, redirect_uri, scope, PKCE 정보 저장
                     auth_state_data = {
-                        "dcr_client_id": client_id,
+                        "dcr_client_id": actual_client_id,  # 실제 생성된 client_id 사용
                         "dcr_redirect_uri": redirect_uri,
                         "dcr_scope": scope,
                         "dcr_state": state,
@@ -684,7 +706,7 @@ class UnifiedMCPServer:
                         f"state={encoded_state}"
                     )
 
-                    logger.info(f"🔐 Redirecting to Azure AD for authorization: {azure_auth_url}")
+                    logger.info(f"🔐 Redirecting to Azure AD for authorization with new client: {actual_client_id}")
 
                     from starlette.responses import RedirectResponse
                     return RedirectResponse(url=azure_auth_url, status_code=302)
