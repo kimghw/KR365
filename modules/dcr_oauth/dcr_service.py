@@ -81,9 +81,21 @@ class DCRService:
         # 쿼리 정리 (여러 줄을 한 줄로)
         clean_query = " ".join(query.split())
 
-        # 작업 타입 판별
+        # 작업 타입 판별 (operation 파라미터 우선 사용)
         query_upper = clean_query.upper()
-        if query_upper.startswith("INSERT"):
+
+        # operation 파라미터로부터 이모지 결정
+        if operation in ["EXECUTE_START", "EXECUTE_SUCCESS", "FETCH_ONE", "FETCH_ALL"]:
+            if operation == "EXECUTE_START":
+                emoji = "🚀"
+                operation_type = "EXECUTE_START"
+            elif operation == "EXECUTE_SUCCESS":
+                emoji = "✅"
+                operation_type = "EXECUTE_SUCCESS"
+            elif operation in ["FETCH_ONE", "FETCH_ALL"]:
+                emoji = "🔍"
+                operation_type = operation
+        elif query_upper.startswith("INSERT"):
             operation_type = "INSERT"
             emoji = "➕"
         elif query_upper.startswith("UPDATE"):
@@ -135,7 +147,9 @@ class DCRService:
                 masked_params.append(param)
 
         # 로그 메시지 구성
-        log_msg = f"{emoji} DB {operation_type} on {table_name}"
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # 밀리초까지만
+        log_msg = f"[{timestamp}] {emoji} DB {operation_type} on {table_name}"
 
         if affected_rows is not None:
             log_msg += f" ({affected_rows} rows affected)"
@@ -155,15 +169,28 @@ class DCRService:
 
     def _execute_query(self, query: str, params: tuple = ()):
         """SQL 쿼리 실행 헬퍼 (새로운 DB 서비스 사용 + 로깅)"""
-        result = self.db_service.execute_query(query, params)
-
-        # DB 로깅 (실행 후)
+        # DB 로깅 (실행 전)
         if self.db_logging_enabled:
-            # execute_query는 영향받은 행 수를 반환
-            affected_rows = result if isinstance(result, int) else None
-            self._log_db_operation("EXECUTE", query, params, affected_rows)
+            self._log_db_operation("EXECUTE_START", query, params, None)
 
-        return result
+        try:
+            result = self.db_service.execute_query(query, params)
+
+            # DB 로깅 (실행 성공)
+            if self.db_logging_enabled:
+                affected_rows = result if isinstance(result, int) else None
+                self._log_db_operation("EXECUTE_SUCCESS", query, params, affected_rows)
+
+                # UPDATE/DELETE인데 영향받은 행이 0인 경우 경고
+                if query.strip().upper().startswith(('UPDATE', 'DELETE')) and affected_rows == 0:
+                    logger.warning(f"⚠️ {query.split()[0]} query affected 0 rows | Query: {query[:100]} | Params: {params}")
+
+            return result
+        except Exception as e:
+            # DB 로깅 (실행 실패)
+            if self.db_logging_enabled:
+                logger.error(f"❌ DB EXECUTE_ERROR: {str(e)} | Query: {query[:200]} | Params: {params}")
+            raise
 
     def _fetch_one(self, query: str, params: tuple = ()):
         """단일 행 조회 헬퍼 (새로운 DB 서비스 사용 + 로깅)"""
@@ -496,16 +523,40 @@ class DCRService:
             logger.info(f"📝 Client replacement log: {json.dumps(delete_log)}")
 
         # 4. 새로운 연결: 현재 클라이언트에 사용자 정보 + client_name 업데이트
+        logger.info(f"🔄 Updating client {dcr_client_id} with user info: object_id={azure_object_id}, email={user_email}, name={inferred_client_name or current_client_name}")
+
         update_query = """
         UPDATE dcr_clients
         SET azure_object_id = ?, user_email = ?, dcr_client_name = ?, updated_at = CURRENT_TIMESTAMP
         WHERE dcr_client_id = ?
         """
 
-        self._execute_query(
+        affected_rows = self._execute_query(
             update_query,
             (azure_object_id, user_email, inferred_client_name or current_client_name, dcr_client_id)
         )
+
+        # UPDATE 결과 검증
+        if affected_rows == 0:
+            logger.error(f"❌ Failed to update client {dcr_client_id} - client not found or update failed")
+            # 실제 데이터 확인
+            verify_query = "SELECT dcr_client_id, azure_object_id, user_email FROM dcr_clients WHERE dcr_client_id = ?"
+            current_data = self._fetch_one(verify_query, (dcr_client_id,))
+            if current_data:
+                logger.error(f"❌ Client exists but UPDATE failed. Current data: {current_data}")
+            else:
+                logger.error(f"❌ Client {dcr_client_id} does not exist in database")
+            raise ValueError(f"Failed to update client {dcr_client_id}")
+
+        # 업데이트 성공 확인
+        verify_query = "SELECT azure_object_id, user_email, dcr_client_name FROM dcr_clients WHERE dcr_client_id = ?"
+        updated_data = self._fetch_one(verify_query, (dcr_client_id,))
+        if updated_data:
+            actual_object_id, actual_email, actual_name = updated_data
+            if actual_object_id != azure_object_id:
+                logger.error(f"❌ UPDATE verification failed: azure_object_id mismatch. Expected: {azure_object_id}, Actual: {actual_object_id}")
+            else:
+                logger.info(f"✅ UPDATE verified: azure_object_id={actual_object_id}, email={actual_email}, name={actual_name}")
 
         if existing_client:
             logger.info(f"✅ Replaced old client {existing_client_id} with new client {dcr_client_id} for user {user_email}")
@@ -535,12 +586,23 @@ class DCRService:
         if not azure_object_id:
             raise ValueError("azure_object_id is required")
 
-        # Store in dcr_azure_users (encrypted)
+        # Store in dcr_azure_users (encrypted) using UPSERT (no DELETE)
+        # NOTE: Avoid INSERT OR REPLACE because REPLACE deletes the existing row,
+        # which triggers ON DELETE SET NULL on referencing tables.
         azure_query = """
-            INSERT OR REPLACE INTO dcr_azure_users (
+            INSERT INTO dcr_azure_users (
                 object_id, application_id, access_token, refresh_token, expires_at,
                 scope, user_email, user_name, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(object_id) DO UPDATE SET
+                application_id = excluded.application_id,
+                access_token = excluded.access_token,
+                refresh_token = excluded.refresh_token,
+                expires_at = excluded.expires_at,
+                scope = excluded.scope,
+                user_email = excluded.user_email,
+                user_name = excluded.user_name,
+                updated_at = CURRENT_TIMESTAMP
         """
         self._execute_query(
             azure_query,
@@ -818,13 +880,22 @@ class DCRService:
         """DCR 토큰 + Azure 토큰 저장 + accounts 테이블 연동"""
         dcr_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
-        # 1) dcr_azure_users에 Azure 토큰 저장
+        # 1) dcr_azure_users에 Azure 토큰 저장 (UPSERT 사용: 기존 행을 삭제하지 않음)
         if azure_object_id:
             azure_query = """
-            INSERT OR REPLACE INTO dcr_azure_users (
+            INSERT INTO dcr_azure_users (
                 object_id, application_id, access_token, refresh_token, expires_at,
                 scope, user_email, user_name, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(object_id) DO UPDATE SET
+                application_id = excluded.application_id,
+                access_token = excluded.access_token,
+                refresh_token = excluded.refresh_token,
+                expires_at = excluded.expires_at,
+                scope = excluded.scope,
+                user_email = excluded.user_email,
+                user_name = excluded.user_name,
+                updated_at = CURRENT_TIMESTAMP
             """
 
             self._execute_query(
