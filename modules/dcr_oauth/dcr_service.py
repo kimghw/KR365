@@ -350,67 +350,56 @@ class DCRService:
             existing_updated_at = existing_client[2]
 
             logger.info(f"🔍 Found existing client {existing_client_id} (name: {existing_client_name}, last_used: {existing_updated_at}) for same redirect_uri + object_id")
-            logger.info(f"🔄 Replacing old client_id {existing_client_id} with new client_id {dcr_client_id}")
+            logger.info(f"🔀 Merging temporary client {dcr_client_id} into existing client {existing_client_id}")
 
-            # 기존 클라이언트의 dcr_client_id를 새로운 것으로 교체
-            replace_client_query = """
+            # client_name이 다르면 업데이트
+            if inferred_client_name and existing_client_name != inferred_client_name:
+                logger.info(f"🔄 Updating existing client_name: {existing_client_name} -> {inferred_client_name}")
+                update_name_query = """
+                UPDATE dcr_clients
+                SET dcr_client_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE dcr_client_id = ?
+                """
+                self._execute_query(update_name_query, (inferred_client_name, existing_client_id))
+                logger.info(f"✅ Client {existing_client_id} name updated to {inferred_client_name}")
+
+            # 기존 클라이언트의 updated_at을 갱신하여 최근 사용 표시
+            touch_query = """
             UPDATE dcr_clients
-            SET dcr_client_id = ?,
-                dcr_client_name = ?,
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE dcr_client_id = ?
+            """
+            self._execute_query(touch_query, (existing_client_id,))
+
+            # 클라이언트 병합 로그 기록
+            merge_log = {
+                "action": "client_merge",
+                "temporary_client_id": dcr_client_id,
+                "existing_client_id": existing_client_id,
+                "user_email": user_email,
+                "azure_object_id": azure_object_id,
+                "redirect_uri": redirect_uri,
+                "reason": "duplicate_client_detected"
+            }
+            logger.info(f"📝 Client merge log: {json.dumps(merge_log)}")
+
+            # 임시 클라이언트 상태를 'merged'로 변경 (나중에 정리 배치에서 삭제 가능)
+            mark_merged_query = """
+            UPDATE dcr_clients
+            SET dcr_status = 'merged',
+                metadata = json_set(
+                    COALESCE(metadata, '{}'),
+                    '$.merged_to', ?,
+                    '$.merged_at', CURRENT_TIMESTAMP
+                ),
                 updated_at = CURRENT_TIMESTAMP
             WHERE dcr_client_id = ?
             """
+            self._execute_query(mark_merged_query, (existing_client_id, dcr_client_id))
+            logger.info(f"✅ Marked temporary client {dcr_client_id} as merged into {existing_client_id}")
 
-            try:
-                # 기존 클라이언트 ID를 새 ID로 변경
-                self._execute_query(
-                    replace_client_query,
-                    (dcr_client_id, inferred_client_name or existing_client_name, existing_client_id)
-                )
-
-                # 관련 토큰들도 새 client_id로 업데이트
-                update_tokens_query = """
-                UPDATE dcr_tokens
-                SET dcr_client_id = ?
-                WHERE dcr_client_id = ?
-                """
-                self._execute_query(update_tokens_query, (dcr_client_id, existing_client_id))
-
-                logger.info(f"✅ Successfully replaced {existing_client_id} → {dcr_client_id}")
-                logger.info(f"✅ All tokens migrated from {existing_client_id} to {dcr_client_id}")
-
-                # 클라이언트 교체 로그 기록
-                replace_log = {
-                    "action": "client_id_replace",
-                    "old_client_id": existing_client_id,
-                    "new_client_id": dcr_client_id,
-                    "user_email": user_email,
-                    "azure_object_id": azure_object_id,
-                    "redirect_uri": redirect_uri
-                }
-                logger.info(f"📝 Client replacement log: {json.dumps(replace_log)}")
-
-            except Exception as e:
-                # Primary Key 충돌이 발생할 경우 (새 client_id가 이미 존재)
-                logger.warning(f"⚠️ Cannot replace {existing_client_id} with {dcr_client_id}: {e}")
-                logger.info(f"Using existing client {existing_client_id} instead")
-
-                # 현재 클라이언트에 사용자 정보만 업데이트
-                update_current_query = """
-                UPDATE dcr_clients
-                SET azure_object_id = ?, user_email = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE dcr_client_id = ?
-                """
-                self._execute_query(
-                    update_current_query,
-                    (azure_object_id, user_email, dcr_client_id)
-                )
-
-                # 기존 클라이언트는 그대로 사용
-                return existing_client_id
-
-            # 새 클라이언트 ID 반환
-            return dcr_client_id
+            # 기존 클라이언트 사용
+            return existing_client_id
 
         # 3. 새로운 연결: 현재 클라이언트에 사용자 정보 + client_name 업데이트
         update_query = """
