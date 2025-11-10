@@ -117,6 +117,13 @@ def load_azure_config(service) -> None:
     env_tenant = os.getenv("DCR_AZURE_TENANT_ID", "common")
     env_redirect = os.getenv("DCR_OAUTH_REDIRECT_URI")
 
+    # Debug logging for environment variables
+    logger.info(f"🔍 Environment variables check:")
+    logger.info(f"  DCR_AZURE_CLIENT_ID: {'Set' if env_app_id else 'Not set'}")
+    logger.info(f"  DCR_AZURE_CLIENT_SECRET: {'Set' if env_secret else 'Not set'}")
+    logger.info(f"  DCR_AZURE_TENANT_ID: {env_tenant}")
+    logger.info(f"  DCR_OAUTH_REDIRECT_URI: {env_redirect if env_redirect else 'Not set'}")
+
     if result:
         current_app_id = result[0]
         current_secret = service.crypto.account_decrypt_sensitive_data(result[1]) if result[1] else None

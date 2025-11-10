@@ -25,19 +25,33 @@ from starlette.routing import Mount, Route
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Load .env file and ensure DCR_OAUTH_REDIRECT_URI is set globally
+# Load .env file and ensure DCR environment variables are set globally
 env_file = PROJECT_ROOT / ".env"
 if env_file.exists():
     load_dotenv(env_file, override=True)  # override=True ensures env vars are updated
     print(f"✅ Loaded environment variables from {env_file}")
 
-    # Ensure DCR_OAUTH_REDIRECT_URI is set in environment
-    redirect_uri = os.getenv("DCR_OAUTH_REDIRECT_URI")
-    if redirect_uri:
-        os.environ["DCR_OAUTH_REDIRECT_URI"] = redirect_uri
-        print(f"✅ DCR_OAUTH_REDIRECT_URI set globally: {redirect_uri}")
-    else:
-        print("⚠️ DCR_OAUTH_REDIRECT_URI not found in .env file")
+    # Ensure all DCR environment variables are set in environment
+    dcr_vars = {
+        "DCR_AZURE_CLIENT_ID": os.getenv("DCR_AZURE_CLIENT_ID"),
+        "DCR_AZURE_CLIENT_SECRET": os.getenv("DCR_AZURE_CLIENT_SECRET"),
+        "DCR_AZURE_TENANT_ID": os.getenv("DCR_AZURE_TENANT_ID"),
+        "DCR_OAUTH_REDIRECT_URI": os.getenv("DCR_OAUTH_REDIRECT_URI"),
+        "DCR_OAUTH_SCOPE": os.getenv("DCR_OAUTH_SCOPE")
+    }
+
+    # Explicitly set all DCR variables in os.environ
+    for var_name, var_value in dcr_vars.items():
+        if var_value:
+            os.environ[var_name] = var_value
+            if "SECRET" not in var_name:
+                print(f"✅ {var_name} set: {var_value[:50]}..." if len(var_value) > 50 else f"✅ {var_name} set: {var_value}")
+            else:
+                print(f"✅ {var_name} set: ***MASKED***")
+        else:
+            print(f"⚠️ {var_name} not found in .env file")
+else:
+    print(f"⚠️ .env file not found at {env_file}")
 
 from modules.mail_query_MCP.mcp_server.http_server import HTTPStreamingMailAttachmentServer
 from modules.enrollment.mcp_server.http_server import HTTPStreamingAuthServer

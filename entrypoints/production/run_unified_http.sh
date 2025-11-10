@@ -17,6 +17,17 @@ if [ -f "$PROJECT_ROOT/.venv/bin/activate" ]; then
     echo "✅ Virtual environment activated"
 fi
 
+# Load .env file if it exists
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    echo "📄 Loading environment variables from .env file..."
+    set -a  # automatically export all variables
+    source "$PROJECT_ROOT/.env"
+    set +a  # turn off automatic export
+    echo "✅ Environment variables loaded from .env"
+else
+    echo "⚠️ No .env file found at $PROJECT_ROOT/.env"
+fi
+
 # Set environment variables
 export PYTHONPATH="$PROJECT_ROOT"
 export PYTHONDONTWRITEBYTECODE=1
@@ -73,6 +84,33 @@ echo ""
 # Check if required environment variables are set
 if [ -z "$ENCRYPTION_KEY" ]; then
     echo "⚠️  WARNING: ENCRYPTION_KEY not set (will be auto-generated)"
+fi
+
+# Check DCR environment variables
+echo ""
+echo "🔍 DCR Configuration Check:"
+if [ -n "$DCR_AZURE_CLIENT_ID" ]; then
+    echo "✅ DCR_AZURE_CLIENT_ID is set: ${DCR_AZURE_CLIENT_ID:0:8}..."
+else
+    echo "⚠️ DCR_AZURE_CLIENT_ID is not set"
+fi
+
+if [ -n "$DCR_AZURE_CLIENT_SECRET" ]; then
+    echo "✅ DCR_AZURE_CLIENT_SECRET is set: ***MASKED***"
+else
+    echo "⚠️ DCR_AZURE_CLIENT_SECRET is not set"
+fi
+
+if [ -n "$DCR_AZURE_TENANT_ID" ]; then
+    echo "✅ DCR_AZURE_TENANT_ID is set: ${DCR_AZURE_TENANT_ID:0:8}..."
+else
+    echo "⚠️ DCR_AZURE_TENANT_ID is not set"
+fi
+
+if [ -n "$DCR_OAUTH_REDIRECT_URI" ]; then
+    echo "✅ DCR_OAUTH_REDIRECT_URI is set: $DCR_OAUTH_REDIRECT_URI"
+else
+    echo "⚠️ DCR_OAUTH_REDIRECT_URI is not set"
 fi
 
 # Run the unified server
