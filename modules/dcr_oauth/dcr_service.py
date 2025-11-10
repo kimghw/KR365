@@ -335,10 +335,10 @@ class DCRService:
         existing_client_query = """
         SELECT dcr_client_id, dcr_client_name, updated_at
         FROM dcr_clients
+        CROSS JOIN json_each(dcr_redirect_uris)
         WHERE azure_object_id = ?
           AND azure_application_id = ?
           AND json_each.value = ?
-        CROSS JOIN json_each(dcr_redirect_uris)
         ORDER BY updated_at DESC
         LIMIT 1
         """
