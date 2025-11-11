@@ -1,0 +1,107 @@
+version: "1.0"
+service:
+  name: "OneDriveHandler"
+  handler_class: "OneDriveHandlers"
+  description: "OneDrive File Management Service"
+  import_from: "onedrive_handler"  # Import from onedrive_handler.py instead of tools.py
+
+tools:
+  - name: "list_files"
+    description: "OneDrive 파일 및 폴더 목록을 조회합니다. folder_path를 지정하면 해당 폴더의 파일을 조회하고, search를 지정하면 검색을 수행합니다."
+    request_class: "ListFilesRequest"
+    response_class: "ListFilesResponse"
+    method_name: "list_files"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        required: false
+      - name: "folder_path"
+        type: "string"
+        description: "폴더 경로 (예: Documents/MyFolder, 생략 시 루트)"
+        required: false
+      - name: "search"
+        type: "string"
+        description: "검색어"
+        required: false
+
+  - name: "read_file"
+    description: "OneDrive 파일의 내용을 읽어옵니다. 텍스트 파일은 텍스트로, 바이너리 파일은 Base64 인코딩으로 반환합니다."
+    request_class: "ReadFileRequest"
+    response_class: "ReadFileResponse"
+    method_name: "read_file"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        required: false
+      - name: "file_path"
+        type: "string"
+        description: "파일 경로 또는 파일 ID (예: Documents/myfile.txt)"
+        required: true
+
+  - name: "write_file"
+    description: "OneDrive에 파일을 생성하거나 덮어씁니다. 기본적으로 기존 파일을 덮어쓰며, overwrite=false로 설정하면 덮어쓰기를 방지합니다."
+    request_class: "WriteFileRequest"
+    response_class: "WriteFileResponse"
+    method_name: "write_file"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        required: false
+      - name: "file_path"
+        type: "string"
+        description: "파일 경로 (예: Documents/myfile.txt)"
+        required: true
+      - name: "content"
+        type: "string"
+        description: "파일 내용"
+        required: true
+      - name: "overwrite"
+        type: "boolean"
+        description: "기존 파일 덮어쓰기 허용 여부"
+        default: true
+        required: false
+
+  - name: "delete_file"
+    description: "OneDrive 파일 또는 폴더를 삭제합니다."
+    request_class: "DeleteFileRequest"
+    response_class: "DeleteFileResponse"
+    method_name: "delete_file"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        required: false
+      - name: "file_path"
+        type: "string"
+        description: "파일 또는 폴더 경로 (예: Documents/myfile.txt)"
+        required: true
+
+  - name: "create_folder"
+    description: "OneDrive에 새 폴더를 생성합니다."
+    request_class: "dict"  # No specific request class, using dict
+    response_class: "dict"  # No specific response class, using dict
+    method_name: "create_folder"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        required: false
+      - name: "folder_path"
+        type: "string"
+        description: "생성할 폴더 경로 (예: Documents/NewFolder)"
+        required: true
+
+prompts: []  # No prompts currently defined

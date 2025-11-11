@@ -1,0 +1,134 @@
+version: "1.0"
+service:
+  name: "OneNoteHandler"
+  handler_class: "OneNoteHandlers"
+  description: "OneNote Content Management Service"
+  import_from: "onenote_handler"  # Import from onenote_handler.py instead of tools.py
+
+tools:
+  - name: "manage_sections_and_pages"
+    description: "OneNote 섹션과 페이지를 관리합니다. action 파라미터로 동작을 지정: create_section(섹션 생성), list_sections(섹션 목록 조회), list_pages(페이지 목록 조회)"
+    request_class: "dict"  # Using dict as no specific request class
+    response_class: "dict"
+    method_name: "handle_sections_and_pages_action"  # Custom method in handlers
+    auth_required: true
+    auth_field: "user_id"
+    input_schema:
+      type: "object"
+      properties:
+        action:
+          type: "string"
+          enum: ["create_section", "list_sections", "list_pages"]
+          description: "수행할 작업: create_section(섹션 생성), list_sections(섹션 목록), list_pages(페이지 목록)"
+        user_id:
+          type: "string"
+          description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        notebook_id:
+          type: "string"
+          description: "노트북 ID (create_section 시 필수)"
+        section_name:
+          type: "string"
+          description: "섹션 이름 (create_section: 생성할 이름, list_sections: 필터링용, list_pages: DB에서 section_id 조회용)"
+        section_id:
+          type: "string"
+          description: "섹션 ID (list_pages: 특정 섹션의 페이지만 조회)"
+        page_title:
+          type: "string"
+          description: "페이지 제목 (list_pages: 필터링용)"
+      required: ["action"]
+
+  - name: "manage_page_content"
+    description: "OneNote 페이지 내용을 관리합니다. action 파라미터로 동작을 지정: get(내용 조회), create(페이지 생성), delete(페이지 삭제)"
+    request_class: "dict"
+    response_class: "dict"
+    method_name: "manage_page_content"
+    auth_required: true
+    auth_field: "user_id"
+    input_schema:
+      type: "object"
+      properties:
+        action:
+          type: "string"
+          enum: ["get", "create", "delete"]
+          description: "수행할 작업: get(내용 조회), create(페이지 생성), delete(페이지 삭제)"
+        user_id:
+          type: "string"
+          description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        page_id:
+          type: "string"
+          description: "페이지 ID (get, delete 시 필수)"
+        section_id:
+          type: "string"
+          description: "섹션 ID (create 시 필수)"
+        title:
+          type: "string"
+          description: "페이지 제목 (create 시 필수)"
+        content:
+          type: "string"
+          description: "페이지 내용 (HTML) (create 시 필수)"
+      required: ["action"]
+
+  - name: "edit_page"
+    description: "OneNote 페이지 내용을 편집합니다 (내용 추가/append)."
+    request_class: "UpdatePageRequest"
+    response_class: "UpdatePageResponse"
+    method_name: "edit_page"
+    auth_required: true
+    auth_field: "user_id"
+    input_schema:
+      type: "object"
+      properties:
+        user_id:
+          type: "string"
+          description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        page_id:
+          type: "string"
+          description: "OneNote 페이지 ID"
+        content:
+          type: "string"
+          description: "추가할 내용 (HTML)"
+      required: ["page_id", "content"]
+
+  - name: "sync_onenote_db"
+    description: "OneNote API에서 최신 섹션/페이지 정보를 가져와 로컬 DB와 동기화합니다. 삭제되거나 변경된 항목을 자동으로 감지하여 DB를 업데이트합니다."
+    request_class: "dict"
+    response_class: "dict"
+    method_name: "sync_onenote_db"
+    auth_required: true
+    auth_field: "user_id"
+    input_schema:
+      type: "object"
+      properties:
+        user_id:
+          type: "string"
+          description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        sync_sections:
+          type: "boolean"
+          description: "섹션 동기화 여부 (기본값: true)"
+          default: true
+        sync_pages:
+          type: "boolean"
+          description: "페이지 동기화 여부 (기본값: true)"
+          default: true
+      required: []
+
+  - name: "get_recent_onenote_items"
+    description: "최근 수정된 OneNote 페이지와 섹션을 조회합니다. 로컬 DB에서 last_modified_time 기준으로 정렬하여 반환합니다."
+    request_class: "dict"
+    response_class: "dict"
+    method_name: "get_recent_onenote_items"
+    auth_required: true
+    auth_field: "user_id"
+    input_schema:
+      type: "object"
+      properties:
+        user_id:
+          type: "string"
+          description: "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+        limit:
+          type: "integer"
+          description: "조회할 항목 수 (섹션과 페이지 각각, 기본값: 10)"
+          default: 10
+      required: []
+
+prompts: []  # No prompts currently defined

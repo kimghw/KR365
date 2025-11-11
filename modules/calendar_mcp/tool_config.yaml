@@ -1,0 +1,139 @@
+version: "1.0"
+service:
+  name: "CalendarHandler"
+  handler_class: "CalendarHandlers"
+  description: "Calendar Management Service"
+  import_from: "calendar_handler"  # Import from calendar_handler.py instead of tools.py
+
+tools:
+  - name: "calendar_list_events"
+    description: "캘린더 이벤트 목록을 조회합니다."
+    request_class: "ListEventsRequest"
+    response_class: "ListEventsResponse"
+    method_name: "list_events"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID"
+        required: true
+      - name: "start_datetime"
+        type: "string"
+        description: "시작 시간 (ISO 8601 형식, 예: 2025-01-15T00:00:00)"
+        required: false
+      - name: "end_datetime"
+        type: "string"
+        description: "종료 시간 (ISO 8601 형식, 예: 2025-01-15T23:59:59)"
+        required: false
+      - name: "max_results"
+        type: "integer"
+        description: "최대 결과 수"
+        default: 100
+        required: false
+
+  - name: "calendar_create_event"
+    description: "새 캘린더 이벤트를 생성합니다."
+    request_class: "CreateEventRequest"
+    response_class: "CreateEventResponse"
+    method_name: "create_event"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID"
+        required: true
+      - name: "subject"
+        type: "string"
+        description: "이벤트 제목"
+        required: true
+      - name: "start_datetime"
+        type: "string"
+        description: "시작 시간 (ISO 8601 형식)"
+        required: true
+      - name: "end_datetime"
+        type: "string"
+        description: "종료 시간 (ISO 8601 형식)"
+        required: true
+      - name: "body_content"
+        type: "string"
+        description: "이벤트 내용"
+        required: false
+      - name: "location"
+        type: "string"
+        description: "이벤트 위치"
+        required: false
+
+  - name: "calendar_update_event"
+    description: "기존 캘린더 이벤트를 업데이트합니다."
+    request_class: "UpdateEventRequest"
+    response_class: "UpdateEventResponse"
+    method_name: "update_event"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID"
+        required: true
+      - name: "event_id"
+        type: "string"
+        description: "이벤트 ID"
+        required: true
+      - name: "subject"
+        type: "string"
+        description: "이벤트 제목"
+        required: false
+      - name: "start_datetime"
+        type: "string"
+        description: "시작 시간 (ISO 8601 형식)"
+        required: false
+      - name: "end_datetime"
+        type: "string"
+        description: "종료 시간 (ISO 8601 형식)"
+        required: false
+      - name: "body_content"
+        type: "string"
+        description: "이벤트 내용"
+        required: false
+      - name: "location"
+        type: "string"
+        description: "이벤트 위치"
+        required: false
+
+  - name: "calendar_delete_event"
+    description: "캘린더 이벤트를 삭제합니다."
+    request_class: "DeleteEventRequest"
+    response_class: "DeleteEventResponse"
+    method_name: "delete_event"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID"
+        required: true
+      - name: "event_id"
+        type: "string"
+        description: "이벤트 ID"
+        required: true
+
+  - name: "calendar_get_event"
+    description: "특정 캘린더 이벤트의 상세 정보를 조회합니다."
+    request_class: "GetEventRequest"
+    response_class: "GetEventResponse"
+    method_name: "get_event"
+    auth_required: true
+    auth_field: "user_id"
+    parameters:
+      - name: "user_id"
+        type: "string"
+        description: "사용자 ID"
+        required: true
+      - name: "event_id"
+        type: "string"
+        description: "이벤트 ID"
+        required: true
+
+prompts: []  # No prompts currently defined

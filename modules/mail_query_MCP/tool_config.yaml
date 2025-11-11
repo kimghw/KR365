@@ -1,0 +1,152 @@
+version: "1.0"
+service:
+  name: "MailAttachmentTools"
+  handler_class: "MCPHandlers"
+  description: "Mail Query and Attachment Processing Service"
+  base_classes:
+    - "AttachmentFilterHandlers"
+    - "CalendarHandlers"
+
+tools:
+  - name: "search_messages"
+    title: "📧 Search Messages"
+    description: "Query emails and download/convert attachments to text. Date priority: start_date/end_date > days_back"
+    request_class: "dict"  # Using raw dict instead of specific request class
+    method_name: "query_email"
+    auth_required: true
+    auth_field: "user_id"
+    # Since this tool has a complex inputSchema, we'll keep it as is
+    input_schema:
+      type: "object"
+      properties:
+        user_id:
+          type: "string"
+          description: "User ID (OPTIONAL - automatically uses authenticated user's ID from session if not provided. Only specify to query a different user's mailbox)"
+        use_recent_account:
+          type: "string"
+          description: "If 'yes', automatically selects the most recently used account (based on last_used_at field). Set to 'yes' when you don't have a specific user_id and want to use the last active account. If 'no' (default), user_id is required."
+        days_back:
+          type: "integer"
+          description: "**DEPRECATED - DO NOT USE**: Number of days to look back. This parameter is deprecated. Instead, you MUST calculate and provide start_date and end_date directly in YYYY-MM-DD format based on the user's request."
+          default: 30
+        max_mails:
+          type: "integer"
+          description: "Maximum number of mails to retrieve"
+          default: 300
+        include_body:
+          type: "string"
+          description: "Include full email body content in the response. When 'yes', returns complete HTML/text content of each email. When 'no', only returns email preview (first ~255 chars). Useful for detailed content analysis"
+          enum: ["yes", "no"]
+          default: "yes"
+        download_attachments:
+          type: "string"
+          description: "Download email attachments and convert supported formats (PDF, DOCX, XLSX, etc.) to text. When 'yes', creates local copies and includes text content in response. When 'no', only shows attachment metadata (name, size)"
+          enum: ["yes", "no"]
+          default: "no"
+        save_emails:
+          type: "string"
+          description: "Save each email as individual text file to disk (mcp_attachments/{user_id}/). Files include headers, body, and attachment list. Useful for archiving or offline access. File names contain subject, date, and sender"
+          enum: ["yes", "no"]
+          default: "no"
+        save_csv:
+          type: "string"
+          description: "Export all retrieved emails' metadata to a single CSV file. Includes: subject, sender, date, read status, importance, attachment count/names, body preview (100 chars). Excel-compatible format with UTF-8 BOM encoding"
+          enum: ["yes", "no"]
+          default: "no"
+        start_date:
+          type: "string"
+          description: "**REQUIRED**: Start date in YYYY-MM-DD format. You MUST calculate this from user's request or days_back parameter. Examples: If user says 'last 3 days' or days_back=3, calculate today minus 3 days (e.g., if today is 2025-11-07, start_date='2025-11-04'). For 'this week', use 7 days ago. For 'last month', use 30 days ago. For 'last 3 months', use 90 days ago. Always calculate and provide this field."
+        end_date:
+          type: "string"
+          description: "**REQUIRED**: End date in YYYY-MM-DD format. You MUST calculate this - typically use today's date unless user specifies otherwise. Examples: If today is 2025-11-07, end_date='2025-11-07'. For any relative time period ('this week', 'last month', etc.), end_date should be today. Always calculate and provide this field."
+        sender_address:
+          type: "string"
+          description: "받은 메일 필터: 특정 발신자가 나에게 보낸 메일만 조회. 예: 'kim@company.com' → kim이 나에게 보낸 메일만. (내가 kim에게 보낸 메일은 포함 안 됨)"
+        subject_contains:
+          type: "string"
+          description: "Filter emails by subject text. Only emails containing this text in the subject will be retrieved. Case-insensitive partial matching (e.g., 'meeting' matches 'Weekly Meeting Report')."
+        keyword:
+          type: "string"
+          description: "전체 메일 검색 키워드 (클라이언트 측 필터링). 제목, 본문, 발신자, 수신자, 첨부파일명 등 모든 필드에서 검색. 날짜/발신자 필터와 함께 사용 가능. 단순 키워드 검색만 지원. 예: '계약서', '프로젝트'. 고급 검색은 keyword_filter를 사용하세요."
+        keyword_filter:
+          type: "object"
+          description: "구조화된 키워드 검색 필터 (클라이언트 측 필터링). AND/OR/NOT 조건을 조합하여 복잡한 검색 가능. 예: {\"and_keywords\": [\"계약서\", \"2024\"], \"not_keywords\": [\"취소\"]} → 계약서와 2024가 모두 포함되고 취소는 제외"
+          properties:
+            and_keywords:
+              type: "array"
+              items:
+                type: "string"
+              description: "AND 조건: 모든 키워드가 포함되어야 함. 예: [\"계약서\", \"2024\"] → 둘 다 포함"
+            or_keywords:
+              type: "array"
+              items:
+                type: "string"
+              description: "OR 조건: 하나 이상의 키워드가 포함되어야 함. 예: [\"계약서\", \"제안서\"] → 둘 중 하나 이상"
+            not_keywords:
+              type: "array"
+              items:
+                type: "string"
+              description: "NOT 조건: 이 키워드들이 포함되지 않아야 함. 예: [\"취소\", \"반려\"] → 둘 다 제외"
+        recipient_address:
+          type: "string"
+          description: "보낸 메일 필터: 내가 특정 수신자에게 보낸 메일만 조회. 예: 'kim@company.com' → 내가 kim에게 보낸 메일만. (kim이 나에게 보낸 메일은 포함 안 됨)"
+        conversation_with:
+          type: "array"
+          items:
+            type: "string"
+          description: "대화 전체 조회: 특정 사람과 주고받은 모든 메일. 이메일 주소 배열로 입력. 예: ['kim@company.com', 'lee@company.com'] → ①이 사람들이 나에게 보낸 메일 + ②내가 이 사람들에게 보낸 메일 모두 포함. 완전한 대화 내역을 보려면 이것을 사용하세요."
+        output_format:
+          type: "string"
+          description: "Output format for the response. 'json' for structured JSON data (optimized for programmatic access), 'text' for human-readable formatted text (default, easier to read)"
+          enum: ["text", "json"]
+          default: "text"
+        query_context:
+          type: "object"
+          description: "Query context information for handling multi-turn conversations"
+          properties:
+            is_first_query:
+              type: "string"
+              description: "Whether this is the first query in the conversation. When 'yes', all required fields must be provided. When 'no', missing fields may use previous values"
+            conversation_turn:
+              type: "integer"
+              description: "The conversation turn number (1 for first query, 2 for second, etc.)"
+            previous_user_id:
+              type: "string"
+              description: "User ID from the previous query that can be reused if not specified in current query"
+      required:
+        - "start_date"
+        - "end_date"
+        - "include_body"
+        - "query_context"
+
+  - name: "query_email_help"
+    title: "📘 Query Email Help"
+    description: "Get detailed usage guide for query_email tool with examples for all parameter combinations"
+    request_class: "dict"
+    method_name: "query_email_help"
+    auth_required: false
+    input_schema:
+      type: "object"
+      properties: {}
+
+  - name: "help"
+    title: "❓ Help"
+    description: "Get detailed help and documentation for available tools. Use without parameters to see all tools, or specify tool_name for detailed information"
+    request_class: "dict"
+    method_name: "help"
+    auth_required: false
+    input_schema:
+      type: "object"
+      properties:
+        tool_name:
+          type: "string"
+          description: "Name of the tool to get help for (optional). If not specified, shows list of all available tools"
+          enum:
+            - "query_email"
+            - "query_email_help"
+            - "help"
+
+# Note: AttachmentFilterHandlers and CalendarHandlers tools are dynamically added by inheritance
+# They are not defined here as they come from parent classes
+
+prompts: []  # No prompts currently defined
