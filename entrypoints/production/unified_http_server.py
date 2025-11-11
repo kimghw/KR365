@@ -1855,8 +1855,17 @@ Error: {error_details}</pre>
         logger.info(f"ℹ️  Server info: http://{self.host}:{self.port}/info")
         logger.info("=" * 80)
 
-        # Run uvicorn
-        uvicorn.run(self.app, host=self.host, port=self.port, log_level="info")
+        # Run uvicorn with extended keep-alive timeout for long-lived connections
+        # timeout_keep_alive: 86400초 (24시간) - 클라이언트 연결을 최대한 오래 유지
+        # timeout_graceful_shutdown: 60초 - 우아한 종료 시 대기 시간
+        uvicorn.run(
+            self.app,
+            host=self.host,
+            port=self.port,
+            log_level="info",
+            timeout_keep_alive=86400,  # 24시간 (기본값: 5초)
+            timeout_graceful_shutdown=60  # 우아한 종료 (기본값: 15초)
+        )
 
 
 def main():
