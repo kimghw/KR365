@@ -116,7 +116,7 @@ class OneNoteHandlers:
             ),
             Tool(
                 name="edit_page",
-                description="OneNote 페이지 내용을 편집합니다 (내용 추가/append).",
+                description="OneNote 페이지 내용을 편집합니다. 다양한 작업 지원: append(끝에 추가), prepend(시작에 추가), insert(특정 위치에 삽입), replace(내용 교체), clean(페이지 정리)",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -128,12 +128,33 @@ class OneNoteHandlers:
                             "type": "string",
                             "description": "OneNote 페이지 ID"
                         },
+                        "action": {
+                            "type": "string",
+                            "enum": ["append", "prepend", "insert", "replace", "clean"],
+                            "description": "작업 유형: append(끝에 추가, 기본값), prepend(시작에 추가), insert(특정 위치에 삽입), replace(내용 교체), clean(페이지 정리)",
+                            "default": "append"
+                        },
                         "content": {
                             "type": "string",
-                            "description": "추가할 내용 (HTML)"
+                            "description": "추가/변경할 내용 (HTML) - clean action에서는 선택 사항"
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "특정 data-id 타겟 (예: #p:{guid}) - 지정하지 않으면 자동으로 찾음"
+                        },
+                        "position": {
+                            "type": "string",
+                            "enum": ["before", "after"],
+                            "description": "insert 작업 시 삽입 위치 (before 또는 after, 기본값: after)",
+                            "default": "after"
+                        },
+                        "keep_title": {
+                            "type": "boolean",
+                            "description": "clean 작업 시 제목 유지 여부 (기본값: true)",
+                            "default": true
                         }
                     },
-                    "required": ["page_id", "content"]
+                    "required": ["page_id"]
                 }
             ),
             Tool(
@@ -442,36 +463,58 @@ class OneNoteHandlers:
                     return [TextContent(type="text", text=json.dumps({"success": False, "message": error_msg}, indent=2))]
 
             elif name == "edit_page":
-                request = UpdatePageRequest(**arguments)
+                user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
+                page_id = arguments.get("page_id")
+                action = arguments.get("action", "append")
+                content = arguments.get("content", "")
+                target = arguments.get("target")
+                position = arguments.get("position", "after")
+                keep_title = arguments.get("keep_title", True)
 
                 # 페이지 ID가 없으면 최근 사용 페이지 조회
-                page_id = request.page_id
                 if not page_id:
-                    recent_page = self.db_service.get_recent_page(request.user_id)
+                    recent_page = self.db_service.get_recent_page(user_id)
                     if recent_page:
                         page_id = recent_page['page_id']
                         logger.info(f"📌 최근 사용 페이지 자동 선택: {recent_page['page_title']} ({page_id})")
 
-                result = await self.onenote_handler.update_page(
-                    request.user_id,
-                    page_id,
-                    request.content
-                )
+                # clean 작업인 경우
+                if action == "clean":
+                    result = await self.onenote_handler.clean_page(
+                        user_id,
+                        page_id,
+                        keep_title=keep_title
+                    )
+                else:
+                    # content가 필요한 작업에서 content가 없으면 에러
+                    if not content:
+                        error_msg = f"{action} 작업에는 content가 필요합니다"
+                        logger.error(error_msg)
+                        return [TextContent(type="text", text=json.dumps({"success": False, "message": error_msg}, indent=2))]
+
+                    # 일반 업데이트 작업
+                    result = await self.onenote_handler.update_page(
+                        user_id,
+                        page_id,
+                        content,
+                        action=action,
+                        target=target,
+                        position=position
+                    )
 
                 # 업데이트한 페이지를 최근 사용으로 마킹
                 if result.get("success") and page_id:
-                    page_info = self.db_service.get_page(request.user_id, "")  # 제목으로 조회 안함
+                    page_info = self.db_service.get_page(user_id, "")  # 제목으로 조회 안함
                     if page_info:
                         self.db_service.save_page(
-                            request.user_id,
+                            user_id,
                             page_info.get('section_id', ''),
                             page_id,
                             page_info.get('page_title', ''),
                             mark_as_recent=True
                         )
 
-                response = UpdatePageResponse(**result)
-                return [TextContent(type="text", text=response.model_dump_json(indent=2))]
+                return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
             elif name == "sync_onenote_db":
                 user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
@@ -890,12 +933,31 @@ class OneNoteHandlers:
                     raise ValueError(f"알 수 없는 action: {action}")
 
             elif name == "edit_page":
-                request = UpdatePageRequest(**arguments)
-                result = await self.onenote_handler.update_page(
-                    request.user_id,
-                    request.page_id,
-                    request.content
-                )
+                user_id = self._get_authenticated_user_id(arguments, authenticated_user_id)
+                page_id = arguments.get("page_id")
+                action = arguments.get("action", "append")
+                content = arguments.get("content", "")
+                target = arguments.get("target")
+                position = arguments.get("position", "after")
+                keep_title = arguments.get("keep_title", True)
+
+                # clean 작업인 경우
+                if action == "clean":
+                    result = await self.onenote_handler.clean_page(
+                        user_id,
+                        page_id,
+                        keep_title=keep_title
+                    )
+                else:
+                    # 일반 업데이트 작업
+                    result = await self.onenote_handler.update_page(
+                        user_id,
+                        page_id,
+                        content,
+                        action=action,
+                        target=target,
+                        position=position
+                    )
                 return result
 
             elif name == "sync_onenote_db":

@@ -476,15 +476,22 @@ class OneNoteHandler:
         self,
         user_id: str,
         page_id: str,
-        content: str
+        content: str,
+        action: str = "append",
+        target: Optional[str] = None,
+        position: str = "after"
     ) -> Dict[str, Any]:
         """
-        페이지 업데이트 (append 방식)
+        페이지 업데이트 (다양한 작업 지원)
 
         Args:
             user_id: 사용자 ID
             page_id: 페이지 ID
-            content: 추가할 내용 (HTML)
+            content: 추가/변경할 내용 (HTML)
+            action: 작업 유형 - "append" (끝에 추가), "prepend" (시작에 추가),
+                   "insert" (특정 위치에 삽입), "replace" (내용 교체)
+            target: 특정 data-id (예: "#p:{guid}"), None이면 자동으로 찾음
+            position: insert 시 위치 - "before" 또는 "after" (기본값: "after")
 
         Returns:
             업데이트 결과
@@ -497,34 +504,83 @@ class OneNoteHandler:
             if not access_token:
                 return {"success": False, "message": "액세스 토큰이 없습니다"}
 
-            # PATCH 요청용 JSON 형식
-            patch_data = [
-                {
-                    "target": "body",
-                    "action": "append",
-                    "content": content
-                }
-            ]
-
+            # 1단계: 페이지 HTML 가져와서 필요시 data-id 찾기
             headers = {
                 "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
             }
 
             async with httpx.AsyncClient() as client:
+                # target이 지정되지 않은 경우에만 페이지 컨텐츠 조회
+                if not target:
+                    content_response = await client.get(
+                        f"{self.graph_base_url}/me/onenote/pages/{page_id}/content",
+                        headers=headers,
+                        timeout=30.0
+                    )
+
+                    if content_response.status_code != 200:
+                        error_msg = f"페이지 컨텐츠 조회 실패: {content_response.status_code} - {content_response.text}"
+                        logger.error(error_msg)
+                        return {"success": False, "message": error_msg}
+
+                    # HTML에서 div의 data-id 추출
+                    html_content = content_response.text
+                    import re
+
+                    # body 내의 모든 div data-id 찾기
+                    data_id_matches = re.findall(r'<div[^>]+data-id="([^"]+)"', html_content)
+
+                    if data_id_matches:
+                        if action == "prepend":
+                            # 시작에 추가할 때는 첫 번째 요소 사용
+                            target = f"#{data_id_matches[0]}"
+                            logger.info(f"📌 prepend 타겟 요소 찾음: {target}")
+                        else:
+                            # 그 외에는 마지막 요소 사용
+                            target = f"#{data_id_matches[-1]}"
+                            logger.info(f"📌 타겟 요소 찾음: {target}")
+                    else:
+                        # data-id를 찾지 못한 경우 body를 target으로 사용
+                        target = "body"
+                        logger.info("📌 data-id를 찾지 못함, body를 target으로 사용")
+
+                # 2단계: PATCH 요청으로 내용 업데이트
+                # action별 patch_data 구성
+                patch_item = {
+                    "target": target,
+                    "action": action,
+                    "content": content
+                }
+
+                # insert나 prepend의 경우 position 추가
+                if action == "insert":
+                    patch_item["position"] = position
+                elif action == "prepend":
+                    # prepend는 첫 번째 요소 before에 insert
+                    patch_item["action"] = "insert"
+                    patch_item["position"] = "before"
+
+                patch_data = [patch_item]
+
+                patch_headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                }
+
                 response = await client.patch(
                     f"{self.graph_base_url}/me/onenote/pages/{page_id}/content",
-                    headers=headers,
+                    headers=patch_headers,
                     json=patch_data,
                     timeout=30.0
                 )
 
                 if response.status_code == 204:
-                    logger.info(f"✅ 페이지 업데이트 성공: {page_id}")
+                    logger.info(f"✅ 페이지 업데이트 성공: {page_id} (action: {action})")
                     return {
                         "success": True,
                         "page_id": page_id,
-                        "message": "페이지가 성공적으로 업데이트되었습니다"
+                        "action": action,
+                        "message": f"페이지가 성공적으로 업데이트되었습니다 ({action})"
                     }
                 else:
                     error_msg = f"페이지 업데이트 실패: {response.status_code} - {response.text}"
@@ -533,6 +589,110 @@ class OneNoteHandler:
 
         except Exception as e:
             error_msg = f"페이지 업데이트 오류: {str(e)}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    async def clean_page(
+        self,
+        user_id: str,
+        page_id: str,
+        keep_title: bool = True
+    ) -> Dict[str, Any]:
+        """
+        페이지 정리 - 모든 내용을 삭제하고 깨끗하게 만듭니다
+
+        Args:
+            user_id: 사용자 ID
+            page_id: 페이지 ID
+            keep_title: 제목을 유지할지 여부 (기본값: True)
+
+        Returns:
+            정리 결과
+        """
+        try:
+            # ID 정규화
+            page_id = self._normalize_onenote_id(page_id)
+
+            access_token = await self._get_access_token(user_id)
+            if not access_token:
+                return {"success": False, "message": "액세스 토큰이 없습니다"}
+
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+            }
+
+            async with httpx.AsyncClient() as client:
+                # 1단계: 페이지 HTML 가져오기
+                content_response = await client.get(
+                    f"{self.graph_base_url}/me/onenote/pages/{page_id}/content",
+                    headers=headers,
+                    timeout=30.0
+                )
+
+                if content_response.status_code != 200:
+                    error_msg = f"페이지 컨텐츠 조회 실패: {content_response.status_code} - {content_response.text}"
+                    logger.error(error_msg)
+                    return {"success": False, "message": error_msg}
+
+                # 2단계: HTML에서 모든 div의 data-id 추출
+                html_content = content_response.text
+                import re
+
+                # body 내의 모든 div data-id 찾기 (title은 제외)
+                if keep_title:
+                    # title div는 보통 첫 번째에 있음
+                    data_id_matches = re.findall(r'<div[^>]+data-id="([^"]+)"', html_content)
+                    # title을 제외한 나머지 삭제
+                    data_ids_to_delete = data_id_matches[1:] if len(data_id_matches) > 1 else []
+                else:
+                    # 모든 div 삭제
+                    data_ids_to_delete = re.findall(r'<div[^>]+data-id="([^"]+)"', html_content)
+
+                if not data_ids_to_delete:
+                    logger.info("📌 삭제할 내용이 없습니다")
+                    return {
+                        "success": True,
+                        "page_id": page_id,
+                        "message": "페이지에 삭제할 내용이 없습니다"
+                    }
+
+                # 3단계: 각 요소를 삭제하는 PATCH 요청 구성
+                patch_data = []
+                for data_id in data_ids_to_delete:
+                    patch_data.append({
+                        "target": f"#{data_id}",
+                        "action": "replace",
+                        "content": ""  # 빈 내용으로 교체 = 삭제
+                    })
+
+                patch_headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                }
+
+                # PATCH 요청 실행
+                response = await client.patch(
+                    f"{self.graph_base_url}/me/onenote/pages/{page_id}/content",
+                    headers=patch_headers,
+                    json=patch_data,
+                    timeout=30.0
+                )
+
+                if response.status_code == 204:
+                    logger.info(f"✅ 페이지 정리 성공: {page_id} ({len(data_ids_to_delete)}개 요소 삭제)")
+                    return {
+                        "success": True,
+                        "page_id": page_id,
+                        "deleted_elements": len(data_ids_to_delete),
+                        "message": f"페이지가 정리되었습니다 ({len(data_ids_to_delete)}개 요소 삭제)"
+                    }
+                else:
+                    error_msg = f"페이지 정리 실패: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    return {"success": False, "message": error_msg}
+
+        except Exception as e:
+            error_msg = f"페이지 정리 오류: {str(e)}"
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
