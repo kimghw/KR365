@@ -151,7 +151,7 @@ class OneNoteHandlers:
                         "keep_title": {
                             "type": "boolean",
                             "description": "clean 작업 시 제목 유지 여부 (기본값: true)",
-                            "default": true
+                            "default": True
                         }
                     },
                     "required": ["page_id"]
