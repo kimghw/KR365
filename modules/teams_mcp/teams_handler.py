@@ -394,3 +394,130 @@ class TeamsHandler:
         except Exception as e:
             logger.error(f"❌ 배치 저장 오류: {str(e)}", exc_info=True)
             return {"success": False, "message": f"오류 발생: {str(e)}"}
+
+    # ========================================================================
+    # 날짜별 채팅 조회
+    # ========================================================================
+
+    async def get_chats_by_date(
+        self,
+        user_id: str,
+        days: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        user_name_filter: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        날짜 범위 내에서 활동이 있었던 채팅방 조회 (lastModifiedDateTime 기준)
+
+        Args:
+            user_id: 사용자 ID
+            days: 조회할 일수 (기본 7일)
+            start_date: 시작 날짜 (ISO 8601 형식)
+            end_date: 종료 날짜 (ISO 8601 형식)
+            user_name_filter: 특정 사용자 이름으로 필터링 (선택)
+
+        Returns:
+            날짜 범위 내 채팅 목록 (사용자별 정리)
+        """
+        try:
+            access_token = await self._get_access_token(user_id)
+            if not access_token:
+                return {"success": False, "message": "액세스 토큰이 없습니다"}
+
+            # 날짜별 채팅 조회
+            result = await self.chats_manager.get_chats_by_date_range(
+                access_token, days, start_date, end_date
+            )
+
+            if not result.get("success"):
+                return result
+
+            chats = result.get("chats", [])
+
+            # DB 동기화
+            if chats:
+                await self.db_manager.sync_chats_to_db(user_id, chats)
+
+                # DB에서 한글/상대 이름을 가져와 각 채팅에 주입
+                for chat in chats:
+                    chat_id = chat.get("id")
+                    if chat_id:
+                        db_result = self.db_manager.db.execute_query(
+                            "SELECT topic_kr, peer_user_name, peer_user_email FROM teams_chats WHERE user_id = ? AND chat_id = ?",
+                            (user_id, chat_id),
+                            fetch_result=True
+                        )
+                        if db_result and len(db_result) > 0:
+                            topic_kr_val, peer_name_val, peer_email_val = db_result[0]
+                            if topic_kr_val:
+                                chat["topic_kr"] = topic_kr_val
+                            if peer_name_val:
+                                chat["peer_user_name"] = peer_name_val
+                            if peer_email_val:
+                                chat["peer_user_email"] = peer_email_val
+
+            # 사용자 이름으로 필터링 (선택)
+            if user_name_filter:
+                filter_lower = user_name_filter.lower()
+                filtered_chats = []
+                for chat in chats:
+                    topic = (chat.get("topic") or "").lower()
+                    topic_kr = (chat.get("topic_kr") or "").lower()
+                    peer_name = (chat.get("peer_user_name") or "").lower()
+
+                    if filter_lower in topic or filter_lower in topic_kr or filter_lower in peer_name:
+                        filtered_chats.append(chat)
+
+                chats = filtered_chats
+                result["filtered_by_user"] = user_name_filter
+
+            # 사용자별로 그룹핑
+            users_map = {}
+            for chat in chats:
+                chat_type = chat.get("chatType", "unknown")
+                topic = chat.get("topic") or chat.get("peer_user_name") or "(제목 없음)"
+                topic_kr = chat.get("topic_kr")
+
+                # 표시 이름: 한글 이름 우선, 없으면 원본
+                display_name = topic_kr if topic_kr else topic
+
+                # 1:1 채팅은 사용자별로 정리
+                if chat_type == "oneOnOne":
+                    if display_name not in users_map:
+                        users_map[display_name] = {
+                            "user_name": display_name,
+                            "chat_id": chat.get("id"),
+                            "chat_type": chat_type,
+                            "last_activity": chat.get("lastUpdatedDateTime"),
+                            "message_count": 1
+                        }
+                    else:
+                        users_map[display_name]["message_count"] += 1
+                else:
+                    # 그룹 채팅은 그대로 추가
+                    group_key = f"[그룹] {display_name}"
+                    if group_key not in users_map:
+                        users_map[group_key] = {
+                            "user_name": display_name,
+                            "chat_id": chat.get("id"),
+                            "chat_type": chat_type,
+                            "last_activity": chat.get("lastUpdatedDateTime"),
+                            "message_count": 1
+                        }
+                    else:
+                        users_map[group_key]["message_count"] += 1
+
+            # 리스트로 변환 및 정렬 (최근 활동순)
+            users_list = list(users_map.values())
+            users_list.sort(key=lambda x: x.get("last_activity", ""), reverse=True)
+
+            result["chats"] = chats
+            result["users"] = users_list
+            result["user_count"] = len(users_list)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ 날짜별 채팅 조회 오류: {str(e)}", exc_info=True)
+            return {"success": False, "message": f"오류 발생: {str(e)}"}

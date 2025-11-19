@@ -249,3 +249,89 @@ class TeamsChats:
         except Exception as e:
             logger.error(f"❌ 멤버 조회 오류: {str(e)}", exc_info=True)
             return {"success": False, "message": f"오류 발생: {str(e)}"}
+
+    async def get_chats_by_date_range(
+        self,
+        access_token: str,
+        days: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        날짜 범위 내에서 활동이 있었던 채팅방 목록 조회 (lastModifiedDateTime 기준)
+
+        Args:
+            access_token: Graph API 액세스 토큰
+            days: 조회할 일수 (기본 7일) - start_date/end_date 없을 때 사용
+            start_date: 시작 날짜 (ISO 8601 형식, 예: "2025-01-01T00:00:00Z")
+            end_date: 종료 날짜 (ISO 8601 형식, 예: "2025-01-15T23:59:59Z")
+
+        Returns:
+            날짜 범위 내 채팅 목록
+        """
+        try:
+            from datetime import datetime, timedelta
+
+            # 날짜 범위 계산
+            if start_date and end_date:
+                # 명시적 날짜 범위 사용
+                start_date_str = start_date if start_date.endswith('Z') else start_date + "Z"
+                end_date_str = end_date if end_date.endswith('Z') else end_date + "Z"
+                calculated_days = None
+            else:
+                # days로 계산 (기본 7일)
+                days = days or 7
+                end_dt = datetime.utcnow()
+                start_dt = end_dt - timedelta(days=days)
+                start_date_str = start_dt.isoformat() + "Z"
+                end_date_str = end_dt.isoformat() + "Z"
+                calculated_days = days
+
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+
+            # Graph API 호출 with date filter
+            # Note: /me/chats API uses 'lastUpdatedDateTime', not 'lastModifiedDateTime'
+            filter_param = f"lastUpdatedDateTime gt {start_date_str} and lastUpdatedDateTime lt {end_date_str}"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.graph_base_url}/me/chats",
+                    headers=headers,
+                    params={"$filter": filter_param},
+                    timeout=30.0
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    chats = data.get("value", [])
+                    days_info = f"{calculated_days}일" if calculated_days else "지정 범위"
+                    logger.info(f"✅ 날짜 범위({days_info}) 채팅 {len(chats)}개 조회 성공")
+
+                    # topic이 null인 1:1 채팅의 상대방 이름 조회
+                    await self._enrich_null_topic_chats(access_token, chats)
+
+                    # 최근순 정렬
+                    chats.sort(
+                        key=lambda x: x.get("lastUpdatedDateTime", ""),
+                        reverse=True
+                    )
+
+                    return {
+                        "success": True,
+                        "chats": chats,
+                        "count": len(chats),
+                        "days": calculated_days,
+                        "start_date": start_date_str,
+                        "end_date": end_date_str
+                    }
+                else:
+                    error_msg = f"날짜별 채팅 조회 실패: {response.status_code}"
+                    logger.error(f"{error_msg} - Response: {response.text}")
+                    return {"success": False, "message": error_msg, "status_code": response.status_code}
+
+        except Exception as e:
+            logger.error(f"❌ 날짜별 채팅 조회 오류: {str(e)}", exc_info=True)
+            return {"success": False, "message": f"오류 발생: {str(e)}"}

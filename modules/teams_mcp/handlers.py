@@ -397,6 +397,37 @@ class TeamsHandlers:
                     "required": []
                 }
             ),
+            Tool(
+                name="teams_get_chats_by_date",
+                description="날짜 범위 내에서 활동이 있었던 채팅방을 조회합니다. lastModifiedDateTime 기준으로 필터링하며, 사용자별로 정리된 결과를 제공합니다.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "user_id": {
+                            "type": "string",
+                            "description": "사용자 ID (OPTIONAL - 세션에서 자동 매핑됨)"
+                        },
+                        "days": {
+                            "type": "integer",
+                            "description": "조회할 일수 (기본 7일). start_date/end_date가 없을 때 사용됩니다.",
+                            "default": 7
+                        },
+                        "start_date": {
+                            "type": "string",
+                            "description": "시작 날짜 (ISO 8601 형식, 예: '2025-01-01T00:00:00Z'). days 대신 명시적 날짜 범위 지정 시 사용."
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "description": "종료 날짜 (ISO 8601 형식, 예: '2025-01-15T23:59:59Z'). start_date와 함께 사용."
+                        },
+                        "user_name_filter": {
+                            "type": "string",
+                            "description": "특정 사용자 이름으로 필터링 (선택). 이름이 포함된 채팅만 조회합니다."
+                        }
+                    },
+                    "required": []
+                }
+            ),
         ]
 
         # Return Teams tools only
@@ -654,6 +685,54 @@ class TeamsHandlers:
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
+            elif name == "teams_get_chats_by_date":
+                # 인증된 user_id 사용 (보안)
+                from infra.core.auth_helpers import get_authenticated_user_id
+                user_id = get_authenticated_user_id(arguments, authenticated_user_id)
+
+                days = arguments.get("days")
+                start_date = arguments.get("start_date")
+                end_date = arguments.get("end_date")
+                user_name_filter = arguments.get("user_name_filter")
+
+                result = await self.teams_handler.get_chats_by_date(
+                    user_id, days, start_date, end_date, user_name_filter
+                )
+
+                # 사용자 친화적인 출력 포맷
+                if result.get("success"):
+                    users = result.get("users", [])
+                    chats = result.get("chats", [])
+                    days_info = result.get("days", "지정 범위")
+
+                    output_lines = [f"📅 날짜 범위 채팅 조회 ({days_info}일)\n"]
+                    output_lines.append(f"📊 총 {len(users)}명과 대화, {len(chats)}개 채팅방\n")
+
+                    if result.get("filtered_by_user"):
+                        output_lines.append(f"🔍 필터: {result['filtered_by_user']}\n")
+
+                    output_lines.append("=" * 50)
+                    output_lines.append("👥 사용자별 정리\n")
+
+                    for idx, user in enumerate(users[:50], 1):  # 최대 50명까지 표시
+                        user_name = user.get("user_name", "알 수 없음")
+                        chat_type = user.get("chat_type", "unknown")
+                        last_activity = user.get("last_activity", "")
+
+                        type_icon = "💬" if chat_type == "oneOnOne" else "👥"
+                        output_lines.append(f"{idx}. {type_icon} {user_name}")
+                        output_lines.append(f"   마지막 활동: {last_activity}")
+                        output_lines.append(f"   Chat ID: {user.get('chat_id', '')}")
+                        output_lines.append("")
+
+                    if len(users) > 50:
+                        output_lines.append(f"... 외 {len(users) - 50}명 더 있음\n")
+
+                    formatted_output = "\n".join(output_lines) + "\n" + json.dumps(result, indent=2, ensure_ascii=False)
+                    return [TextContent(type="text", text=formatted_output)]
+
+                return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+
             else:
                 error_msg = f"알 수 없는 도구: {name}"
                 logger.error(error_msg)
@@ -742,6 +821,18 @@ class TeamsHandlers:
                     chat_id = arguments.get("chat_id")
                     topic_en = arguments.get("topic_en")
                     return await self.teams_handler.save_korean_name(user_id, topic_kr, chat_id, topic_en)
+
+            elif name == "teams_get_chats_by_date":
+                from infra.core.auth_helpers import get_authenticated_user_id
+                user_id = get_authenticated_user_id(arguments, authenticated_user_id)
+                days = arguments.get("days")
+                start_date = arguments.get("start_date")
+                end_date = arguments.get("end_date")
+                user_name_filter = arguments.get("user_name_filter")
+
+                return await self.teams_handler.get_chats_by_date(
+                    user_id, days, start_date, end_date, user_name_filter
+                )
 
             else:
                 raise ValueError(f"알 수 없는 도구: {name}")
