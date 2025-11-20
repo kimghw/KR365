@@ -4,11 +4,13 @@ import json
 import os
 import sqlite3
 import subprocess
+import secrets
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from starlette.routing import Route
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from infra.core.logger import get_logger
 from infra.core.config import get_config
@@ -16,11 +18,68 @@ from infra.core.config import get_config
 logger = get_logger(__name__)
 config = get_config()
 
+# Session storage (in-memory for simplicity)
+dashboard_sessions = {}  # {session_token: {"username": "admin", "created_at": timestamp}}
+
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / ".env"
 UNIFIED_PID_FILE = Path("/tmp/unified_server.pid")
 QUICK_TUNNEL_PID_FILE = Path("/tmp/quick_tunnel.pid")
+
+
+class DashboardAuth:
+    """Dashboard authentication service"""
+
+    @staticmethod
+    def verify_credentials(username: str, password: str) -> bool:
+        """Verify admin credentials from environment variables"""
+        admin_username = os.getenv("DASHBOARD_ADMIN_USERNAME", "admin")
+        admin_password = os.getenv("DASHBOARD_ADMIN_PASSWORD", "")
+
+        if not admin_password:
+            logger.warning("DASHBOARD_ADMIN_PASSWORD not set in .env file")
+            return False
+
+        return username == admin_username and password == admin_password
+
+    @staticmethod
+    def create_session(username: str) -> str:
+        """Create a new session and return session token"""
+        import time
+        session_token = secrets.token_urlsafe(32)
+        dashboard_sessions[session_token] = {
+            "username": username,
+            "created_at": time.time()
+        }
+        logger.info(f"Dashboard session created for user: {username}")
+        return session_token
+
+    @staticmethod
+    def verify_session(session_token: str) -> bool:
+        """Verify if session token is valid"""
+        if not session_token:
+            return False
+
+        session_data = dashboard_sessions.get(session_token)
+        if not session_data:
+            return False
+
+        # Check session expiry (24 hours)
+        import time
+        session_age = time.time() - session_data["created_at"]
+        if session_age > 86400:  # 24 hours
+            del dashboard_sessions[session_token]
+            return False
+
+        return True
+
+    @staticmethod
+    def delete_session(session_token: str):
+        """Delete a session (logout)"""
+        if session_token in dashboard_sessions:
+            del dashboard_sessions[session_token]
+            logger.info("Dashboard session deleted")
 
 
 class DashboardService:
@@ -784,10 +843,220 @@ class DashboardService:
 def create_dashboard_routes() -> List[Route]:
     """Create dashboard routes"""
     service = DashboardService()
+    auth = DashboardAuth()
+
+    # Login page
+    async def login_page(request):
+        """Login page for dashboard"""
+        html = """
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            padding: 50px;
+            width: 100%;
+            max-width: 420px;
+        }
+        .login-header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .login-header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        .login-header p {
+            color: #666;
+            font-size: 14px;
+        }
+        .form-group {
+            margin-bottom: 25px;
+        }
+        .form-group label {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 14px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-login:hover {
+            background: #5568d3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+        .error-message.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>🔐 Dashboard Login</h1>
+            <p>MailQueryWithMCP Management</p>
+        </div>
+        <div id="error-message" class="error-message"></div>
+        <form id="login-form">
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn-login">Login</button>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error-message');
+
+            try {
+                const response = await fetch('/dashboard/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Redirect to dashboard
+                    window.location.href = '/dashboard';
+                } else {
+                    errorDiv.textContent = data.error || 'Invalid credentials';
+                    errorDiv.classList.add('show');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Login failed. Please try again.';
+                errorDiv.classList.add('show');
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+        return HTMLResponse(html)
+
+    # Login API
+    async def api_login(request):
+        """Handle login request"""
+        try:
+            data = await request.json()
+            username = data.get('username', '')
+            password = data.get('password', '')
+
+            if auth.verify_credentials(username, password):
+                session_token = auth.create_session(username)
+
+                # Set cookie
+                response = JSONResponse({"success": True})
+                response.set_cookie(
+                    key="dashboard_session",
+                    value=session_token,
+                    httponly=True,
+                    max_age=86400,  # 24 hours
+                    samesite="lax"
+                )
+                return response
+            else:
+                logger.warning(f"Failed login attempt for username: {username}")
+                return JSONResponse(
+                    {"success": False, "error": "Invalid username or password"},
+                    status_code=401
+                )
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            return JSONResponse(
+                {"success": False, "error": "Login failed"},
+                status_code=500
+            )
+
+    # Logout API
+    async def api_logout(request):
+        """Handle logout request"""
+        session_token = request.cookies.get("dashboard_session")
+        if session_token:
+            auth.delete_session(session_token)
+
+        response = RedirectResponse(url="/dashboard/login", status_code=302)
+        response.delete_cookie("dashboard_session")
+        return response
+
+    # Check session helper
+    def check_session(request) -> bool:
+        """Check if user is authenticated"""
+        session_token = request.cookies.get("dashboard_session")
+        return auth.verify_session(session_token)
 
     # Main dashboard page
     async def dashboard_page(request):
         """Main dashboard HTML page"""
+        # Check authentication
+        if not check_session(request):
+            return RedirectResponse(url="/dashboard/login", status_code=302)
+
         html = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -1043,13 +1312,21 @@ def create_dashboard_routes() -> List[Route]:
         <div class="header" style="position: relative;">
             <h1>🚀 MailQueryWithMCP Management Dashboard</h1>
             <p>Unified server management, logs, and configuration</p>
-            <a href="https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"
-               target="_blank"
-               class="btn btn-primary"
-               style="position: absolute; top: 20px; right: 20px; display: inline-flex; align-items: center; gap: 8px;">
-                <span>🔐</span>
-                <span>Azure AD App Registration</span>
-            </a>
+            <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 10px;">
+                <a href="https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"
+                   target="_blank"
+                   class="btn btn-primary"
+                   style="display: inline-flex; align-items: center; gap: 8px;">
+                    <span>🔐</span>
+                    <span>Azure AD App</span>
+                </a>
+                <a href="/dashboard/logout"
+                   class="btn btn-danger"
+                   style="display: inline-flex; align-items: center; gap: 8px;">
+                    <span>🚪</span>
+                    <span>Logout</span>
+                </a>
+            </div>
         </div>
 
         <div class="grid">
@@ -1940,9 +2217,24 @@ def create_dashboard_routes() -> List[Route]:
 """
         return HTMLResponse(html)
 
+    # Require authentication wrapper
+    def require_auth(handler):
+        """Decorator to require authentication for API endpoints"""
+        async def wrapper(request):
+            if not check_session(request):
+                return JSONResponse(
+                    {"error": "Authentication required"},
+                    status_code=401
+                )
+            return await handler(request)
+        return wrapper
+
     # API: Get status
     async def api_status(request):
         """Get server and tunnel status"""
+        if not check_session(request):
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+
         server_status = service.get_server_status()
         tunnel_status = service.get_tunnel_status()
         return JSONResponse({
@@ -2126,6 +2418,11 @@ def create_dashboard_routes() -> List[Route]:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     return [
+        # Authentication routes (no auth required)
+        Route("/dashboard/login", endpoint=login_page, methods=["GET"]),
+        Route("/dashboard/login", endpoint=api_login, methods=["POST"]),
+        Route("/dashboard/logout", endpoint=api_logout, methods=["GET"]),
+        # Dashboard routes (auth required)
         Route("/dashboard", endpoint=dashboard_page, methods=["GET"]),
         Route("/dashboard/api/status", endpoint=api_status, methods=["GET"]),
         Route("/dashboard/api/server/start", endpoint=api_start_server, methods=["POST"]),
