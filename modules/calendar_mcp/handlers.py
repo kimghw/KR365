@@ -32,6 +32,26 @@ class CalendarHandlers:
         logger.info("✅ CalendarHandlers initialized")
 
     # ========================================================================
+    # MCP Protocol: stdio wrapper methods
+    # ========================================================================
+
+    async def handle_list_tools(self) -> List[Tool]:
+        """
+        stdio 서버용 wrapper 메서드
+        stdio_server.py의 @app.list_tools()에서 호출
+        """
+        return await self.handle_calendar_list_tools()
+
+    async def handle_call_tool(
+        self, name: str, arguments: Dict[str, Any]
+    ) -> List[TextContent]:
+        """
+        stdio 서버용 wrapper 메서드
+        stdio_server.py의 @app.call_tool()에서 호출
+        """
+        return await self.handle_calendar_call_tool(name, arguments)
+
+    # ========================================================================
     # MCP Protocol: list_tools
     # ========================================================================
 
