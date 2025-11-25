@@ -192,14 +192,14 @@ class DCRService:
 
         logger.info(log_msg)
 
-    def _execute_query(self, query: str, params: tuple = ()):
+    def _execute_query(self, query: str, params: tuple = (), user_email: str = None, client_id: str = None):
         """SQL 쿼리 실행 헬퍼 (새로운 DB 서비스 사용 + 로깅)"""
         # DB 로깅 (실행 전)
         if self.db_logging_enabled:
             self._log_db_operation("EXECUTE_START", query, params, None)
 
         try:
-            result = self.db_service.execute_query(query, params)
+            result = self.db_service.execute_query(query, params, user_email, client_id)
 
             # DB 로깅 (실행 성공)
             if self.db_logging_enabled:

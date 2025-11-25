@@ -2403,6 +2403,48 @@ def create_dashboard_routes() -> List[Route]:
         result = service.get_dcr_config()
         return JSONResponse(result)
 
+    # API: Get DCR database logs
+    async def api_get_dcr_logs(request):
+        """Get DCR database operation logs"""
+        try:
+            from modules.dcr_oauth.dcr_db_logger import get_dcr_db_logger
+
+            dcr_logger = get_dcr_db_logger()
+
+            # Get query parameters
+            limit = int(request.query_params.get("limit", 100))
+            operation = request.query_params.get("operation", None)
+
+            logs = dcr_logger.get_recent_logs(limit, operation)
+
+            return JSONResponse({
+                "success": True,
+                "count": len(logs),
+                "logs": logs
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting DCR logs: {e}")
+            return JSONResponse({"success": False, "error": str(e)})
+
+    # API: Get DCR database log statistics
+    async def api_get_dcr_log_stats(request):
+        """Get DCR database operation statistics"""
+        try:
+            from modules.dcr_oauth.dcr_db_logger import get_dcr_db_logger
+
+            dcr_logger = get_dcr_db_logger()
+            stats = dcr_logger.get_statistics()
+
+            return JSONResponse({
+                "success": True,
+                "statistics": stats
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting DCR log stats: {e}")
+            return JSONResponse({"success": False, "error": str(e)})
+
     # API: Update DCR redirect URI
     async def api_update_dcr_redirect_uri(request):
         """Update DCR redirect URI"""
@@ -2444,4 +2486,6 @@ def create_dashboard_routes() -> List[Route]:
         Route("/dashboard/api/db/reset", endpoint=api_reset_database, methods=["POST"]),
         Route("/dashboard/api/dcr/config", endpoint=api_get_dcr_config, methods=["GET"]),
         Route("/dashboard/api/dcr/redirect-uri", endpoint=api_update_dcr_redirect_uri, methods=["POST"]),
+        Route("/dashboard/api/dcr/logs", endpoint=api_get_dcr_logs, methods=["GET"]),
+        Route("/dashboard/api/dcr/logs/stats", endpoint=api_get_dcr_log_stats, methods=["GET"]),
     ]

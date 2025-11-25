@@ -102,6 +102,12 @@ class Config:
                 f"{'='*60}"
             )
             path = default_path
+
+        # 상대 경로를 절대 경로로 변환
+        if not Path(path).is_absolute():
+            project_root = Path(__file__).parent.parent.parent
+            path = str(project_root / path)
+
         # 디렉터리가 없으면 생성
         db_dir = Path(path).parent
         db_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +121,12 @@ class Config:
             default_path = "./data/dcr.db"
             logger.info(f"DCR_DATABASE_PATH 미설정. 기본값 사용: {default_path}")
             path = default_path
+
+        # 상대 경로를 절대 경로로 변환
+        if not Path(path).is_absolute():
+            project_root = Path(__file__).parent.parent.parent
+            path = str(project_root / path)
+
         # 디렉터리가 없으면 생성
         db_dir = Path(path).parent
         db_dir.mkdir(parents=True, exist_ok=True)

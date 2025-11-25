@@ -3,6 +3,7 @@ DCR OAuth Database Service
 DatabaseManager를 사용하는 개선된 DB 서비스
 """
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -11,6 +12,8 @@ from contextlib import contextmanager
 from infra.core.database import DatabaseManager
 from infra.core.logger import get_logger
 from infra.core.config import get_config
+from infra.core.logs_db import get_logs_db_service
+from .dcr_db_logger import get_dcr_db_logger
 
 logger = get_logger(__name__)
 
@@ -32,6 +35,8 @@ class DCRDatabaseService:
         self.config = get_config()
         self.db_path = self.config.dcr_database_path
         self._connection: Optional[sqlite3.Connection] = None
+        self.db_logger = get_dcr_db_logger()  # DCR DB 로거 초기화
+        self.logs_db = get_logs_db_service()  # logs.db 서비스 초기화
         self._ensure_database()
 
     def _ensure_database(self):
@@ -42,7 +47,27 @@ class DCRDatabaseService:
         # 데이터베이스 초기 연결 및 설정
         if not db_path.exists():
             logger.info(f"DCR 데이터베이스 생성: {self.db_path}")
+
+            # logs.db에 DCR DB 생성 로깅
+            self.logs_db.log_dcr_database_operation(
+                operation="CREATE",
+                database_path=str(self.db_path),
+                performed_by="SYSTEM",
+                details={"reason": "Database file not exists, creating new one"}
+            )
+
             self._get_connection()  # 초기 연결로 파일 생성
+
+            # 생성 후 파일 크기 확인 및 로깅
+            if db_path.exists():
+                file_size = db_path.stat().st_size
+                self.logs_db.log_dcr_database_operation(
+                    operation="CREATE_COMPLETE",
+                    database_path=str(self.db_path),
+                    file_size=file_size,
+                    performed_by="SYSTEM",
+                    details={"initial_size": file_size}
+                )
 
     def _get_connection(self) -> sqlite3.Connection:
         """데이터베이스 연결 반환 (레이지 초기화)"""
@@ -83,10 +108,36 @@ class DCRDatabaseService:
         finally:
             cursor.close()
 
+    def _extract_table_name(self, query: str, prefix: str) -> str:
+        """SQL 쿼리에서 테이블명 추출"""
+        try:
+            # 쿼리를 소문자로 변환하여 처리
+            query_lower = query.lower()
+            prefix_lower = prefix.lower()
+
+            # prefix 이후의 테이블명 찾기
+            start_idx = query_lower.find(prefix_lower)
+            if start_idx == -1:
+                return "UNKNOWN"
+
+            # prefix 이후 첫 단어가 테이블명
+            remaining = query[start_idx + len(prefix):].strip()
+            # 공백, 괄호, 세미콜론 등으로 테이블명 끝 찾기
+            import re
+            match = re.match(r'[\w_]+', remaining)
+            if match:
+                return match.group(0)
+
+            return "UNKNOWN"
+        except:
+            return "UNKNOWN"
+
     def execute_query(
         self,
         query: str,
-        params: Union[Tuple[Any, ...], Dict[str, Any], None] = None
+        params: Union[Tuple[Any, ...], Dict[str, Any], None] = None,
+        user_email: Optional[str] = None,
+        client_id: Optional[str] = None
     ) -> int:
         """
         SQL 쿼리 실행 (INSERT, UPDATE, DELETE)
@@ -94,6 +145,8 @@ class DCRDatabaseService:
         Args:
             query: 실행할 SQL 쿼리
             params: 쿼리 매개변수
+            user_email: 작업 수행 사용자 (로깅용)
+            client_id: 클라이언트 ID (로깅용)
 
         Returns:
             lastrowid (INSERT의 경우) 또는 영향받은 행 수
@@ -101,6 +154,22 @@ class DCRDatabaseService:
         Note:
             기존 db_utils.execute_query와 호환되도록 설계됨
         """
+        # 작업 유형과 테이블 파싱
+        query_upper = query.strip().upper()
+        if query_upper.startswith('INSERT'):
+            operation = 'INSERT'
+            # INSERT INTO table_name 패턴에서 테이블명 추출
+            table = self._extract_table_name(query, 'INSERT INTO')
+        elif query_upper.startswith('UPDATE'):
+            operation = 'UPDATE'
+            table = self._extract_table_name(query, 'UPDATE')
+        elif query_upper.startswith('DELETE'):
+            operation = 'DELETE'
+            table = self._extract_table_name(query, 'DELETE FROM')
+        else:
+            operation = 'OTHER'
+            table = 'UNKNOWN'
+
         try:
             with self.get_cursor() as cursor:
                 if params:
@@ -109,13 +178,39 @@ class DCRDatabaseService:
                     cursor.execute(query)
 
                 # INSERT의 경우 lastrowid, 그 외는 rowcount 반환
-                if query.strip().upper().startswith('INSERT'):
-                    return cursor.lastrowid
+                if operation == 'INSERT':
+                    result = cursor.lastrowid
                 else:
-                    return cursor.rowcount
+                    result = cursor.rowcount
+
+                # 성공 로깅
+                self.db_logger.log_operation(
+                    operation=operation,
+                    table=table,
+                    query=query,
+                    params=params,
+                    result=result,
+                    user_email=user_email,
+                    client_id=client_id
+                )
+
+                return result
 
         except sqlite3.Error as e:
-            logger.error(f"DCR 쿼리 실행 실패: {query[:100]}... - {str(e)}")
+            error_msg = str(e)
+            logger.error(f"DCR 쿼리 실행 실패: {query[:100]}... - {error_msg}")
+
+            # 실패 로깅
+            self.db_logger.log_operation(
+                operation=operation,
+                table=table,
+                query=query,
+                params=params,
+                error=error_msg,
+                user_email=user_email,
+                client_id=client_id
+            )
+
             raise
 
     def fetch_one(
@@ -216,6 +311,73 @@ class DCRDatabaseService:
             self._connection.close()
             self._connection = None
             logger.debug("DCR 데이터베이스 연결 종료됨")
+
+    def delete_database(self, performed_by: str = "SYSTEM", reason: Optional[str] = None) -> bool:
+        """
+        DCR 데이터베이스 파일 삭제
+
+        Args:
+            performed_by: 삭제 수행자
+            reason: 삭제 이유
+
+        Returns:
+            삭제 성공 여부
+        """
+        db_path = Path(self.db_path)
+
+        # 연결 종료
+        self.close()
+
+        if db_path.exists():
+            try:
+                # 파일 크기 기록
+                file_size = db_path.stat().st_size
+
+                # logs.db에 삭제 시작 로깅
+                self.logs_db.log_dcr_database_operation(
+                    operation="DELETE",
+                    database_path=str(self.db_path),
+                    file_size=file_size,
+                    performed_by=performed_by,
+                    details={"reason": reason or "Manual deletion"}
+                )
+
+                # WAL 및 SHM 파일도 함께 삭제
+                for suffix in ['', '-wal', '-shm']:
+                    file_path = Path(str(db_path) + suffix)
+                    if file_path.exists():
+                        file_path.unlink()
+                        logger.info(f"삭제됨: {file_path}")
+
+                # logs.db에 삭제 완료 로깅
+                self.logs_db.log_dcr_database_operation(
+                    operation="DELETE_COMPLETE",
+                    database_path=str(self.db_path),
+                    file_size=file_size,
+                    performed_by=performed_by,
+                    details={"deleted_size": file_size}
+                )
+
+                logger.info(f"DCR 데이터베이스 삭제 완료: {self.db_path}")
+                return True
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"DCR 데이터베이스 삭제 실패: {error_msg}")
+
+                # logs.db에 삭제 실패 로깅
+                self.logs_db.log_dcr_database_operation(
+                    operation="DELETE_FAILED",
+                    database_path=str(self.db_path),
+                    performed_by=performed_by,
+                    details={"reason": reason or "Manual deletion"},
+                    success=False,
+                    error_message=error_msg
+                )
+                return False
+        else:
+            logger.warning(f"삭제할 DCR 데이터베이스가 없음: {self.db_path}")
+            return False
 
 
 # 하위 호환성을 위한 래퍼 함수들

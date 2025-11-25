@@ -390,9 +390,60 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
     async def handle_list_prompts(self) -> List[Prompt]:
         """List available prompts"""
         logger.info("📋 [MCP Handler] list_prompts() called")
-        
-        # Return empty list as requested
-        return []
+
+        # Return available prompts
+        prompts = [
+            Prompt(
+                name="format_email_results",
+                description="이메일 조회 결과를 표 형식으로 정리",
+                arguments=[
+                    PromptArgument(
+                        name="format_style",
+                        description="포맷 스타일 (summary, detailed, brief)",
+                        required=False
+                    ),
+                    PromptArgument(
+                        name="include_attachments",
+                        description="첨부파일 포함 여부",
+                        required=False
+                    ),
+                    PromptArgument(
+                        name="user_id",
+                        description="조회할 사용자 ID",
+                        required=True
+                    )
+                ]
+            ),
+            Prompt(
+                name="mail_attachment_query",
+                description="메일 및 첨부파일 조회 안내",
+                arguments=[
+                    PromptArgument(
+                        name="user_query",
+                        description="사용자의 조회 요청",
+                        required=True
+                    )
+                ]
+            ),
+            Prompt(
+                name="attachment_summary_format",
+                description="첨부파일 내용 요약 포맷",
+                arguments=[
+                    PromptArgument(
+                        name="summary_length",
+                        description="요약 길이 (brief, standard, detailed)",
+                        required=False
+                    ),
+                    PromptArgument(
+                        name="highlight_sections",
+                        description="강조할 섹션",
+                        required=False
+                    )
+                ]
+            )
+        ]
+
+        return prompts
     
     async def handle_get_prompt(self, name: str, arguments: Dict[str, Any]) -> PromptMessage:
         """Get specific prompt"""

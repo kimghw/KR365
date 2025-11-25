@@ -140,8 +140,33 @@ class LogsDBService:
                 ON dcr_middleware_logs(user_id, timestamp DESC)
             """)
 
+            # 3. dcr_database_operations 테이블 (dcr.db 생성/삭제 추적용)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dcr_database_operations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT (datetime('now')),
+                    operation TEXT NOT NULL,  -- CREATE, DELETE, BACKUP, RESTORE 등
+                    database_path TEXT NOT NULL,
+                    file_size INTEGER,
+                    performed_by TEXT,  -- 작업 수행자 (사용자 또는 시스템)
+                    details TEXT,  -- 추가 상세 정보 (JSON 형식)
+                    success INTEGER DEFAULT 1,
+                    error_message TEXT
+                )
+            """)
+
+            # dcr_database_operations 인덱스
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_dcr_db_ops_timestamp
+                ON dcr_database_operations(timestamp DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_dcr_db_ops_operation
+                ON dcr_database_operations(operation, timestamp DESC)
+            """)
+
             conn.commit()
-            logger.info("✅ 로그 테이블 초기화 완료 (unified_request_logs, dcr_middleware_logs)")
+            logger.info("✅ 로그 테이블 초기화 완료 (unified_request_logs, dcr_middleware_logs, dcr_database_operations)")
 
         except Exception as e:
             logger.error(f"❌ 로그 테이블 초기화 실패: {str(e)}")
@@ -475,6 +500,180 @@ class LogsDBService:
         except Exception as e:
             logger.error(f"❌ DCR 로그 삭제 실패: {str(e)}")
             return False
+        finally:
+            conn.close()
+
+    # ========================================================================
+    # DCR Database Operations Logs
+    # ========================================================================
+
+    def log_dcr_database_operation(
+        self,
+        operation: str,
+        database_path: str,
+        file_size: Optional[int] = None,
+        performed_by: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        success: bool = True,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """
+        DCR 데이터베이스 작업 로그 저장 (생성/삭제/백업/복원 등)
+
+        Args:
+            operation: 작업 유형 (CREATE, DELETE, BACKUP, RESTORE 등)
+            database_path: 데이터베이스 파일 경로
+            file_size: 파일 크기 (바이트, 선택)
+            performed_by: 작업 수행자 (사용자 또는 시스템)
+            details: 추가 상세 정보 (선택)
+            success: 성공 여부
+            error_message: 에러 메시지 (실패 시)
+
+        Returns:
+            성공 여부
+        """
+        conn = self._get_connection()
+        try:
+            # JSON 직렬화
+            details_json = json.dumps(details, ensure_ascii=False) if details else None
+
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO dcr_database_operations
+                (operation, database_path, file_size, performed_by, details, success, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (operation, database_path, file_size, performed_by, details_json, int(success), error_message))
+
+            conn.commit()
+
+            # 콘솔 로깅
+            if success:
+                logger.info(f"📁 DCR DB {operation}: {database_path} (수행자: {performed_by or 'SYSTEM'})")
+            else:
+                logger.error(f"❌ DCR DB {operation} 실패: {database_path} - {error_message}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ DCR 데이터베이스 작업 로그 저장 실패: {str(e)}")
+            return False
+        finally:
+            conn.close()
+
+    def get_dcr_database_operations(
+        self,
+        limit: int = 100,
+        operation: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        DCR 데이터베이스 작업 로그 조회
+
+        Args:
+            limit: 조회할 개수
+            operation: 특정 작업만 조회 (CREATE, DELETE 등)
+
+        Returns:
+            로그 목록
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            if operation:
+                cursor.execute("""
+                    SELECT * FROM dcr_database_operations
+                    WHERE operation = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, (operation, limit))
+            else:
+                cursor.execute("""
+                    SELECT * FROM dcr_database_operations
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, (limit,))
+
+            logs = []
+            for row in cursor.fetchall():
+                log_dict = dict(row)
+                # JSON 문자열을 딕셔너리로 파싱
+                if log_dict.get('details'):
+                    try:
+                        log_dict['details'] = json.loads(log_dict['details'])
+                    except:
+                        pass
+                logs.append(log_dict)
+
+            return logs
+
+        except Exception as e:
+            logger.error(f"❌ DCR 데이터베이스 작업 로그 조회 실패: {str(e)}")
+            return []
+        finally:
+            conn.close()
+
+    def get_dcr_database_stats(self) -> Dict[str, Any]:
+        """
+        DCR 데이터베이스 작업 통계 조회
+
+        Returns:
+            작업별 통계 정보
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            # 전체 작업 수
+            cursor.execute("SELECT COUNT(*) FROM dcr_database_operations")
+            total_operations = cursor.fetchone()[0]
+
+            # 작업 유형별 카운트
+            cursor.execute("""
+                SELECT operation, COUNT(*) as count
+                FROM dcr_database_operations
+                GROUP BY operation
+            """)
+            operations_by_type = {row[0]: row[1] for row in cursor.fetchall()}
+
+            # 성공/실패 카운트
+            cursor.execute("""
+                SELECT success, COUNT(*) as count
+                FROM dcr_database_operations
+                GROUP BY success
+            """)
+            success_stats = {bool(row[0]): row[1] for row in cursor.fetchall()}
+
+            # 최근 작업 (최근 5개)
+            cursor.execute("""
+                SELECT operation, database_path, timestamp, success
+                FROM dcr_database_operations
+                ORDER BY timestamp DESC
+                LIMIT 5
+            """)
+            recent_operations = [
+                {
+                    "operation": row[0],
+                    "database_path": row[1],
+                    "timestamp": row[2],
+                    "success": bool(row[3])
+                }
+                for row in cursor.fetchall()
+            ]
+
+            return {
+                "total_operations": total_operations,
+                "operations_by_type": operations_by_type,
+                "success_count": success_stats.get(True, 0),
+                "failure_count": success_stats.get(False, 0),
+                "recent_operations": recent_operations
+            }
+
+        except Exception as e:
+            logger.error(f"❌ DCR 데이터베이스 작업 통계 조회 실패: {str(e)}")
+            return {
+                "error": str(e),
+                "total_operations": 0
+            }
         finally:
             conn.close()
 

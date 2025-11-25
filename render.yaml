@@ -23,10 +23,22 @@ services:
         value: "INFO"
       - key: DATABASE_PATH
         value: "./data/graphapi.db"
+      - key: DCR_DATABASE_PATH
+        value: "./data/dcr.db"
       - key: ENABLE_OAUTH_AUTH
         value: "true"
       - key: DCR_OAUTH_SCOPE
         value: "offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Files.Read Files.ReadWrite Calendars.Read Calendars.ReadWrite Notes.Read Notes.ReadWrite"
+
+      # DCR OAuth 설정 (민감하지 않은 정보)
+      - key: DCR_AZURE_CLIENT_ID
+        value: "88f1daa2-a6cc-4c7b-b575-b76bf0a6435b"
+      - key: DCR_AZURE_TENANT_ID
+        value: "2da6fff9-9e75-4088-b510-a5d769de35f8"
+      - key: DCR_ALLOWED_DOMAINS
+        value: "krs.co.kr"
+      - key: ENABLE_DCR_ACCOUNT_SYNC
+        value: "true"
 
 
     healthCheckPath: /health
