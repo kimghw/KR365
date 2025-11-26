@@ -183,7 +183,7 @@ class DCRDatabaseService:
                 else:
                     result = cursor.rowcount
 
-                # 성공 로깅
+                # 파일 로깅 (기존)
                 self.db_logger.log_operation(
                     operation=operation,
                     table=table,
@@ -194,13 +194,31 @@ class DCRDatabaseService:
                     client_id=client_id
                 )
 
+                # logs.db에도 로깅 (추가)
+                details = {
+                    "table": table,
+                    "query": query[:500],  # 쿼리가 너무 길 수 있으므로 제한
+                    "params": str(params)[:200] if params else None,
+                    "rows_affected": result,
+                    "user_email": user_email,
+                    "client_id": client_id
+                }
+
+                self.logs_db.log_dcr_database_operation(
+                    operation=f"DCR_{operation}",
+                    database_path=str(self.db_path),
+                    performed_by=user_email or "SYSTEM",
+                    details=details,
+                    success=True
+                )
+
                 return result
 
         except sqlite3.Error as e:
             error_msg = str(e)
             logger.error(f"DCR 쿼리 실행 실패: {query[:100]}... - {error_msg}")
 
-            # 실패 로깅
+            # 파일 로깅 (기존)
             self.db_logger.log_operation(
                 operation=operation,
                 table=table,
@@ -209,6 +227,24 @@ class DCRDatabaseService:
                 error=error_msg,
                 user_email=user_email,
                 client_id=client_id
+            )
+
+            # logs.db에도 실패 로깅 (추가)
+            details = {
+                "table": table,
+                "query": query[:500],
+                "params": str(params)[:200] if params else None,
+                "user_email": user_email,
+                "client_id": client_id
+            }
+
+            self.logs_db.log_dcr_database_operation(
+                operation=f"DCR_{operation}_FAILED",
+                database_path=str(self.db_path),
+                performed_by=user_email or "SYSTEM",
+                details=details,
+                success=False,
+                error_message=error_msg[:500]  # 에러 메시지도 길이 제한
             )
 
             raise

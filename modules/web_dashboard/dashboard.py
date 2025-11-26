@@ -489,6 +489,7 @@ class DashboardService:
         # Main database
         if hasattr(config, 'database_path'):
             db_path = Path(config.database_path)
+            logger.info(f"[OnRender Debug] Main DB path: {db_path}, exists: {db_path.exists()}")
             if db_path.exists():
                 databases.append({
                     "name": "Main Database (graphapi.db)",
@@ -496,10 +497,20 @@ class DashboardService:
                     "size": db_path.stat().st_size,
                     "size_mb": round(db_path.stat().st_size / 1024 / 1024, 2)
                 })
+            else:
+                # 경로가 존재하지 않아도 리스트에 추가하여 문제 파악
+                databases.append({
+                    "name": "Main Database (graphapi.db) - NOT FOUND",
+                    "path": str(db_path),
+                    "size": 0,
+                    "size_mb": 0,
+                    "error": f"File not exists at {db_path}"
+                })
 
         # DCR database
         if hasattr(config, 'dcr_database_path'):
             dcr_db_path = Path(config.dcr_database_path)
+            logger.info(f"[OnRender Debug] DCR DB path: {dcr_db_path}, exists: {dcr_db_path.exists()}")
             if dcr_db_path.exists():
                 databases.append({
                     "name": "DCR Database (dcr.db)",
@@ -507,6 +518,29 @@ class DashboardService:
                     "size": dcr_db_path.stat().st_size,
                     "size_mb": round(dcr_db_path.stat().st_size / 1024 / 1024, 2)
                 })
+            else:
+                # 경로가 존재하지 않아도 리스트에 추가하여 문제 파악
+                databases.append({
+                    "name": "DCR Database (dcr.db) - NOT FOUND",
+                    "path": str(dcr_db_path),
+                    "size": 0,
+                    "size_mb": 0,
+                    "error": f"File not exists at {dcr_db_path}"
+                })
+
+        # OnRender 환경 디버깅 정보 추가
+        import os
+        databases.append({
+            "name": "Debug Info",
+            "path": f"CWD: {os.getcwd()}",
+            "size": 0,
+            "size_mb": 0,
+            "info": {
+                "RENDER": os.getenv("RENDER", "Not set"),
+                "PWD": os.getenv("PWD", "Not set"),
+                "HOME": os.getenv("HOME", "Not set")
+            }
+        })
 
         return databases
 
@@ -528,6 +562,12 @@ class DashboardService:
     def query_database(db_path: str, query: str, limit: Optional[int] = None) -> Dict:
         """Execute SQL query on database"""
         try:
+            # 데이터베이스 파일이 없으면 생성
+            db_path_obj = Path(db_path)
+            if not db_path_obj.exists():
+                logger.warning(f"Database not exists, creating: {db_path}")
+                db_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
