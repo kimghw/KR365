@@ -528,8 +528,36 @@ class DashboardService:
                     "error": f"File not exists at {dcr_db_path}"
                 })
 
-        # OnRender 환경 디버깅 정보 추가
+        # Logs database
+        # logs.db 경로 결정 (LogsDBService와 동일한 로직 사용)
         import os
+        if os.getenv("RENDER"):
+            # OnRender 환경
+            logs_db_path = Path("/opt/render/project/src/data/logs.db")
+        else:
+            # 로컬 환경
+            project_root = Path(__file__).parent.parent.parent
+            logs_db_path = project_root / "data" / "logs.db"
+
+        logger.info(f"[OnRender Debug] Logs DB path: {logs_db_path}, exists: {logs_db_path.exists()}")
+
+        if logs_db_path.exists():
+            databases.append({
+                "name": "Logs Database (logs.db)",
+                "path": str(logs_db_path),
+                "size": logs_db_path.stat().st_size,
+                "size_mb": round(logs_db_path.stat().st_size / 1024 / 1024, 2)
+            })
+        else:
+            databases.append({
+                "name": "Logs Database (logs.db) - NOT FOUND",
+                "path": str(logs_db_path),
+                "size": 0,
+                "size_mb": 0,
+                "error": f"File not exists at {logs_db_path}"
+            })
+
+        # OnRender 환경 디버깅 정보 추가
         databases.append({
             "name": "Debug Info",
             "path": f"CWD: {os.getcwd()}",
