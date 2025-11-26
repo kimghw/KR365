@@ -102,7 +102,7 @@ async def verify_bearer_token_middleware(request, call_next=None):
         "/info",
         "/enrollment/callback",  # Enrollment 서비스의 OAuth 콜백
         "/auth/callback",  # DCR OAuth 콜백
-        "/dashboard/login"  # Dashboard 로그인 페이지
+        "/dashboard"  # Dashboard uses session-based authentication (dashboard_session cookie)
     ]
 
     if any(path.startswith(excluded) for excluded in excluded_path_prefixes):
