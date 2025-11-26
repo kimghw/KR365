@@ -1331,6 +1331,31 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
         async def health_check():
             return {"status": "healthy", "server": "email-mcp-server"}
 
+        @fastapi_app.post(
+            "/ping",
+            tags=["MCP"],
+            summary="MCP Ping - Keep-alive endpoint",
+            description="MCP standard ping endpoint for connection health verification"
+        )
+        async def ping(request: Request):
+            """MCP ping endpoint for keep-alive as per MCP specification"""
+            # Get request ID from headers or body
+            request_id = None
+            if request.headers.get("content-type") == "application/json":
+                try:
+                    body = await request.json()
+                    request_id = body.get("id", "ping")
+                except:
+                    request_id = "ping"
+            else:
+                request_id = request.headers.get("x-request-id", "ping")
+
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {}
+            })
+
         @fastapi_app.get(
             "/info",
             tags=["Info"],

@@ -222,6 +222,26 @@ All MCP requests should be sent as POST to the root endpoint `/`.
                 "timestamp": utc_now_iso(),
             }
 
+        @app.post("/ping")
+        async def ping(request: Request):
+            """MCP ping endpoint for keep-alive as per MCP specification"""
+            # Get request ID from headers or body
+            request_id = None
+            if request.headers.get("content-type") == "application/json":
+                try:
+                    body = await request.json()
+                    request_id = body.get("id", "ping")
+                except:
+                    request_id = "ping"
+            else:
+                request_id = request.headers.get("x-request-id", "ping")
+
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {}
+            })
+
         @app.get("/info")
         async def server_info():
             """Server information endpoint"""

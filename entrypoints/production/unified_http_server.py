@@ -1611,10 +1611,30 @@ Error: {error_details}</pre>
         dashboard_routes = create_dashboard_routes()
 
         # Create routes
+        async def unified_ping(request):
+            """MCP ping endpoint for keep-alive as per MCP specification"""
+            # Get request ID from headers or body
+            request_id = None
+            if request.headers.get("content-type") == "application/json":
+                try:
+                    body = await request.json()
+                    request_id = body.get("id", "ping")
+                except:
+                    request_id = "ping"
+            else:
+                request_id = request.headers.get("x-request-id", "ping")
+
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {}
+            })
+
         routes = [
             # Unified endpoints
             Route("/health", endpoint=unified_health, methods=["GET"]),
             Route("/info", endpoint=unified_info, methods=["GET"]),
+            Route("/ping", endpoint=unified_ping, methods=["POST"]),
             Route("/", endpoint=root_handler, methods=["GET", "HEAD"]),
             Route("/", endpoint=options_handler, methods=["OPTIONS"]),
             # DCR OAuth endpoints (at root for Claude Connector compatibility)

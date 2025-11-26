@@ -310,6 +310,25 @@ class HTTPStreamingIACSServer:
             }
             return JSONResponse(response, status_code=404, headers=base_headers)
 
+    async def _handle_ping(self, request: Request):
+        """MCP ping endpoint for keep-alive as per MCP specification"""
+        # Get request ID from headers or body
+        request_id = None
+        if request.headers.get("content-type") == "application/json":
+            try:
+                body = await request.json()
+                request_id = body.get("id", "ping")
+            except:
+                request_id = "ping"
+        else:
+            request_id = request.headers.get("x-request-id", "ping")
+
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {}
+        })
+
     def _create_app(self):
         """Create Starlette application"""
 
@@ -413,11 +432,14 @@ class HTTPStreamingIACSServer:
             # Health and info endpoints
             Route("/health", endpoint=health_check, methods=["GET"]),
             Route("/info", endpoint=server_info, methods=["GET"]),
+            # MCP Ping endpoint
+            Route("/ping", endpoint=self._handle_ping, methods=["POST"]),
             # Streaming endpoints
             Route("/stream", endpoint=self._handle_streaming_request, methods=["POST"]),
             Route("/stream", endpoint=options_handler, methods=["OPTIONS"]),
             Route("/health", endpoint=options_handler, methods=["OPTIONS"]),
             Route("/info", endpoint=options_handler, methods=["OPTIONS"]),
+            Route("/ping", endpoint=options_handler, methods=["OPTIONS"]),
         ]
 
         return Starlette(routes=routes)
