@@ -83,6 +83,14 @@ class DCRService:
                 "⚠️ DCR_ACCESS_TOKEN_TTL_SECONDS가 0 이하입니다. 기본값 3600초를 사용합니다."
             )
             ttl_seconds = 3600
+
+        # 환경 변수 설정 여부 확인 및 로그
+        env_ttl = os.getenv("DCR_ACCESS_TOKEN_TTL_SECONDS")
+        if env_ttl:
+            logger.info(f"🔧 Bearer 토큰 TTL: {ttl_seconds}초 (환경 변수에서 설정됨)")
+        else:
+            logger.info(f"🔧 Bearer 토큰 TTL: {ttl_seconds}초 (하드코딩된 기본값)")
+
         self.dcr_bearer_ttl_seconds = ttl_seconds
 
         if self.allowed_domains:

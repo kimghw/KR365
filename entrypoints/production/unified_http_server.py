@@ -1145,8 +1145,10 @@ class UnifiedMCPServer:
                     (client_id, azure_object_id),
                 )
 
-                # Store refresh token (30 days validity)
-                refresh_token_expiry = utc_now() + timedelta(days=30)
+                # Store refresh token (configurable TTL, default 30 days)
+                refresh_token_ttl_days = config.dcr_refresh_token_ttl_days
+                refresh_token_expiry = utc_now() + timedelta(days=refresh_token_ttl_days)
+                logger.info(f"🔐 Refresh token TTL: {refresh_token_ttl_days} days")
                 dcr_service._execute_query(
                     """
                     INSERT INTO dcr_tokens (

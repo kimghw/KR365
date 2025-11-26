@@ -204,8 +204,31 @@ class Config:
 
     @property
     def dcr_access_token_ttl_seconds(self) -> int:
-        """DCR Bearer 토큰 기본 TTL(초)"""
-        return int(os.getenv("DCR_ACCESS_TOKEN_TTL_SECONDS", "3600"))
+        """DCR Bearer 토큰 기본 TTL(초)
+
+        우선순위:
+        1. 환경 변수: DCR_ACCESS_TOKEN_TTL_SECONDS
+        2. 하드코딩된 기본값: 3600초 (1시간)
+        """
+        # 환경 변수가 설정되어 있으면 사용, 없으면 기본값 3600초
+        env_value = os.getenv("DCR_ACCESS_TOKEN_TTL_SECONDS")
+        if env_value:
+            return int(env_value)
+        return 3600  # 기본값: 1시간
+
+    @property
+    def dcr_refresh_token_ttl_days(self) -> int:
+        """DCR Refresh 토큰 기본 TTL(일)
+
+        우선순위:
+        1. 환경 변수: DCR_REFRESH_TOKEN_TTL_DAYS
+        2. 하드코딩된 기본값: 30일
+        """
+        # 환경 변수가 설정되어 있으면 사용, 없으면 기본값 30일
+        env_value = os.getenv("DCR_REFRESH_TOKEN_TTL_DAYS")
+        if env_value:
+            return int(env_value)
+        return 30  # 기본값: 30일
 
     # OAuth 리다이렉트 설정
     @property
