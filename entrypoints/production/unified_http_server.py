@@ -1286,21 +1286,50 @@ class UnifiedMCPServer:
                     result = dcr_service._fetch_one(query, (auth_code,))
 
                     if not result:
-                        logger.error(f"❌ Invalid auth_code: {auth_code}")
-                        return Response(
+                        # auth_code가 없는 경우, 최근에 생성된 활성 authorization_code 찾기
+                        # (재인증 시 새로운 auth_code가 생성되었을 가능성)
+                        logger.warning(f"⚠️ Auth code not found: {auth_code}, looking for recent codes...")
+
+                        # state에 원본 state가 있으면 메타데이터에서 찾기
+                        if original_state:
+                            fallback_query = """
+                            SELECT dcr_token_value, dcr_client_id, metadata
+                            FROM dcr_tokens
+                            WHERE dcr_token_type = 'authorization_code'
+                              AND dcr_status = 'active'
+                              AND expires_at > datetime('now')
+                              AND json_extract(metadata, '$.state') = ?
+                            ORDER BY expires_at DESC
+                            LIMIT 1
                             """
-                            <!DOCTYPE html>
-                            <html>
-                            <head><title>Authentication Error</title></head>
-                            <body>
-                                <h1>❌ Authentication Failed</h1>
-                                <p>Invalid authorization code</p>
-                            </body>
-                            </html>
-                            """,
-                            media_type="text/html",
-                            status_code=400,
-                        )
+                            fallback_result = dcr_service._fetch_one(fallback_query, (original_state,))
+
+                            if fallback_result:
+                                auth_code = fallback_result[0]
+                                client_id = fallback_result[1]
+                                metadata_json = fallback_result[2]
+                                logger.info(f"✅ Found recent auth_code by state match: {auth_code[:20]}...")
+                                result = (client_id, metadata_json)
+                            else:
+                                logger.error(f"❌ No valid auth_code found for state: {original_state}")
+
+                        if not result:
+                            logger.error(f"❌ Invalid auth_code: {auth_code}")
+                            return Response(
+                                """
+                                <!DOCTYPE html>
+                                <html>
+                                <head><title>Authentication Error</title></head>
+                                <body>
+                                    <h1>❌ Authentication Failed</h1>
+                                    <p>Invalid or expired authorization code</p>
+                                    <p>Please try logging in again.</p>
+                                </body>
+                                </html>
+                                """,
+                                media_type="text/html",
+                                status_code=400,
+                            )
 
                     client_id, metadata_json = result
 
@@ -1509,7 +1538,33 @@ Error: {error_details}</pre>
                 # authorization code 처리 (초기 등록 vs 기존 인증)
                 if azure_object_id:
                     if is_initial_registration:
-                        # 초기 등록: authorization code를 새로 저장
+                        # 초기 등록: authorization code를 새로 생성하고 저장
+                        import secrets
+                        from datetime import timedelta
+
+                        auth_code = secrets.token_urlsafe(32)
+                        code_expiry = utc_now() + timedelta(minutes=10)
+
+                        metadata = {
+                            "redirect_uri": redirect_uri,
+                            "state": original_state,
+                            "scope": scope
+                        }
+                        if code_challenge:
+                            metadata["code_challenge"] = code_challenge
+                            metadata["code_challenge_method"] = code_challenge_method
+
+                        # 기존 authorization code 삭제
+                        dcr_service._execute_query(
+                            """
+                            DELETE FROM dcr_tokens
+                            WHERE dcr_client_id = ?
+                              AND dcr_token_type = 'authorization_code'
+                            """,
+                            (client_id,)
+                        )
+
+                        # 새 authorization code 저장
                         dcr_service._execute_query(
                             """
                             INSERT INTO dcr_tokens (

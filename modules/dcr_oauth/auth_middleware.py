@@ -79,6 +79,10 @@ async def verify_bearer_token_middleware(request, call_next=None):
     path = request.url.path
     method = request.method
 
+    # Get base URL for resource_metadata
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+    resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource"
+
     # OAuth 엔드포인트와 메타데이터는 인증 제외
     # .well-known은 경로 어디든 포함되면 제외 (MCP discovery 지원)
     if "/.well-known/" in path:
@@ -175,12 +179,12 @@ async def verify_bearer_token_middleware(request, call_next=None):
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32001,
-                    "message": "Authentication required. Please authenticate using OAuth 2.0"
+                    "message": "Authentication required"
                 },
             },
             status_code=401,
             headers={
-                "WWW-Authenticate": 'Bearer realm="MCP Server", error="invalid_token"',
+                "WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata_url}"',
                 "Access-Control-Allow-Origin": "*",
             },
         )
@@ -236,11 +240,14 @@ async def verify_bearer_token_middleware(request, call_next=None):
             return JSONResponse(
                 {
                     "jsonrpc": "2.0",
-                    "error": {"code": -32001, "message": "Invalid authentication token"},
+                    "error": {
+                        "code": -32001,
+                        "message": "Invalid or expired authentication token"
+                    },
                 },
                 status_code=401,
                 headers={
-                    "WWW-Authenticate": 'Bearer realm="MCP Server", error="invalid_token"',
+                    "WWW-Authenticate": f'Bearer error="invalid_token", resource_metadata="{resource_metadata_url}", error_description="Token is expired or invalid. Use refresh_token to obtain a new access token"',
                     "Access-Control-Allow-Origin": "*",
                 },
             )
@@ -266,7 +273,7 @@ async def verify_bearer_token_middleware(request, call_next=None):
             },
             status_code=401,
             headers={
-                "WWW-Authenticate": 'Bearer realm="MCP Server", error="invalid_token"',
+                "WWW-Authenticate": f'Bearer error="invalid_token", resource_metadata="{resource_metadata_url}"',
                 "Access-Control-Allow-Origin": "*",
             },
         )
