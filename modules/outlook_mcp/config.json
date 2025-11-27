@@ -1,0 +1,55 @@
+{
+  "mcp": {
+    "server_name": "email-mcp-server",
+    "command": "python",
+    "args": ["-m", "modules.mail_query_without_db.mcp_server.server"],
+    "env": {
+      "PYTHONPATH": "${PROJECT_ROOT}"
+    }
+  },
+  "paths": {
+    "base_dir": "${HOME}/mcp_data",
+    "attachments_dir": "${HOME}/mcp_data/attachments",
+    "emails_dir": "${HOME}/mcp_data/emails",
+    "exports_dir": "${HOME}/mcp_data/exports",
+    "temp_dir": "${HOME}/mcp_data/temp",
+    "log_file": "${HOME}/mcp_data/logs/mcp_mail_server.log",
+    "use_absolute_paths": true,
+    "create_if_not_exists": true
+  },
+  "server": {
+    "default_host": "0.0.0.0",
+    "default_port": 8001
+  },
+  "email": {
+    "comment": "blocked_senders: .env의 BLOCKED_SENDER_PATTERNS 환경변수 사용 권장. 없으면 아래 값 사용",
+    "blocked_senders": ["noreply@", "no-reply@", "donotreply@", "auto-reply@"],
+    "default_days_back": 30,
+    "default_max_mails": 300,
+    "csv_encoding": "utf-8-sig"
+  },
+  "file_handling": {
+    "supported_text_extensions": [".txt", ".log", ".md", ".csv"],
+    "supported_pdf_extensions": [".pdf"],
+    "supported_word_extensions": [".doc", ".docx"],
+    "supported_hwp_extensions": [".hwp"],
+    "supported_excel_extensions": [".xls", ".xlsx"],
+    "supported_image_extensions": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"],
+    "max_preview_length": 50000,
+    "max_filename_length": 200,
+    "max_file_size_mb": 50,
+    "cleanup_after_query": true
+  },
+  "database": {
+    "comment": "DATABASE_MAIL_QUERY_PATH 환경 변수 우선 사용. 미설정 시 아래 기본값 사용",
+    "default_path": "./data/mail_query.db",
+    "use_absolute_paths": true,
+    "create_if_not_exists": true
+  },
+  "dcr_oauth": {
+    "comment": "DCR OAuth 모듈 의존성 설정",
+    "module_name": "mail_query",
+    "database_name_pattern": "auth_{module_name}.db",
+    "description": "mail_query 모듈이 DCR 인증을 사용함을 명시. DCR은 auth_mail_query.db를 사용"
+  }
+}
