@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from infra.core.database import get_database_manager
+from modules.mail_query_MCP.implementations.database_manager import get_mail_query_database
 from infra.core.logger import get_logger
 from modules.enrollment import AccountOrchestrator
 from modules.enrollment import get_auth_orchestrator, AuthStartRequest
@@ -29,7 +29,7 @@ class AccountManagementTool:
         self.config = config
         self.project_root = Path(__file__).parent.parent.parent.parent
         self.enrollment_dir = self.project_root / "enrollment"
-        self.db = get_database_manager()
+        self.db = get_mail_query_database()
 
     async def register_account(self, arguments: Dict[str, Any]) -> str:
         """

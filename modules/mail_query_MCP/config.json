@@ -19,7 +19,7 @@
   },
   "server": {
     "default_host": "0.0.0.0",
-    "default_port": 8002
+    "default_port": 8001
   },
   "email": {
     "comment": "blocked_senders: .env의 BLOCKED_SENDER_PATTERNS 환경변수 사용 권장. 없으면 아래 값 사용",
@@ -39,5 +39,17 @@
     "max_filename_length": 200,
     "max_file_size_mb": 50,
     "cleanup_after_query": true
+  },
+  "database": {
+    "comment": "DATABASE_MAIL_QUERY_PATH 환경 변수 우선 사용. 미설정 시 아래 기본값 사용",
+    "default_path": "./data/mail_query.db",
+    "use_absolute_paths": true,
+    "create_if_not_exists": true
+  },
+  "dcr_oauth": {
+    "comment": "DCR OAuth 모듈 의존성 설정",
+    "module_name": "mail_query",
+    "database_name_pattern": "auth_{module_name}.db",
+    "description": "mail_query 모듈이 DCR 인증을 사용함을 명시. DCR은 auth_mail_query.db를 사용"
   }
 }

@@ -140,7 +140,7 @@ class Config:
                 "use_absolute_paths": True,
                 "create_if_not_exists": True,
             },
-            "server": {"default_host": "0.0.0.0", "default_port": 8002},
+            "server": {"default_host": "0.0.0.0", "default_port": 8001},
             "email": {
                 "blocked_senders": [],
                 "default_days_back": 30,
@@ -258,7 +258,7 @@ class Config:
     @property
     def default_port(self) -> int:
         """Get default port"""
-        return self._config.get("server", {}).get("default_port", 8002)
+        return self._config.get("server", {}).get("default_port", 8001)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value by key (dot notation supported)"""

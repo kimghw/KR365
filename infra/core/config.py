@@ -122,6 +122,32 @@ class Config:
         return path
 
     @property
+    def mail_query_database_path(self) -> str:
+        """Mail Query 모듈 전용 SQLite 데이터베이스 파일 경로"""
+        path = os.getenv("DATABASE_MAIL_QUERY_PATH")
+
+        # OnRender 환경 감지 및 특별 처리
+        if os.getenv("RENDER"):
+            if not path or path.startswith("./"):
+                default_path = "/opt/render/project/src/data/mail_query.db"
+                logger.info(f"OnRender 환경 감지: Mail Query 데이터베이스 경로를 {default_path}로 설정")
+                path = default_path
+        elif not path:
+            default_path = "./data/mail_query.db"
+            logger.info(f"DATABASE_MAIL_QUERY_PATH 미설정. 기본값 사용: {default_path}")
+            path = default_path
+
+        # 상대 경로를 절대 경로로 변환
+        if not Path(path).is_absolute() and not os.getenv("RENDER"):
+            project_root = Path(__file__).parent.parent.parent
+            path = str(project_root / path)
+
+        # 디렉터리가 없으면 생성
+        db_dir = Path(path).parent
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
     def dcr_database_path(self) -> str:
         """DCR 전용 SQLite 데이터베이스 파일 경로"""
         path = os.getenv("DCR_DATABASE_PATH")

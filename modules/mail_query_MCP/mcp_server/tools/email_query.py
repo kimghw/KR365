@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from infra.core import get_database_manager, get_logger
+from infra.core import get_logger
+from modules.mail_query_MCP.implementations.database_manager import get_mail_query_database
 from infra.utils.datetime_parser import parse_date_range as util_parse_date_range, Timezone
 from modules.mail_query import (
     MailQuerySeverFilters,
@@ -135,7 +136,7 @@ class EmailQueryTool:
 2. use_recent_account=true로 설정하여 최근 사용 계정 사용"""
 
         # Check token validity
-        db = get_database_manager()
+        db = get_mail_query_database()
         account = db.fetch_one(
             "SELECT access_token, token_expiry FROM accounts WHERE user_id = ? AND is_active = 1",
             (user_id,)
@@ -651,7 +652,7 @@ class EmailQueryTool:
             # Update last_used_at for the account
             try:
                 from datetime import datetime, timezone
-                db = get_database_manager()
+                db = get_mail_query_database()
                 now_utc = datetime.now(timezone.utc).isoformat()
                 db.execute_query(
                     "UPDATE accounts SET last_used_at = ? WHERE user_id = ?",

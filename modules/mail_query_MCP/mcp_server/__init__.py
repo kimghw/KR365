@@ -4,6 +4,6 @@ This package contains the modularized MCP server implementation
 for handling email attachments.
 """
 
-from .http_server import HTTPStreamingMailAttachmentServer
-
-__all__ = ["HTTPStreamingMailAttachmentServer"]
+# Import moved to implementations folder
+# from .http_server import HTTPStreamingMailAttachmentServer
+# __all__ = ["HTTPStreamingMailAttachmentServer"]

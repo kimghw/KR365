@@ -8,7 +8,7 @@ from mcp.types import Prompt, PromptArgument, PromptMessage, TextContent, Tool
 
 from infra.core.logger import get_logger
 from infra.core.error_messages import ErrorCode, MCPError
-from infra.core.database import get_database_manager
+from modules.mail_query_MCP.implementations.database_manager import get_mail_query_database
 from infra.handlers.attachment_filter_handlers import AttachmentFilterHandlers
 from modules.calendar_mcp import CalendarHandlers
 from .prompts import get_prompt
@@ -34,7 +34,7 @@ def get_default_user_id() -> Optional[str]:
     try:
         from datetime import datetime, timezone
 
-        db = get_database_manager()
+        db = get_mail_query_database()
 
         # 활성화된 계정 조회 (last_used_at 추가)
         query = """

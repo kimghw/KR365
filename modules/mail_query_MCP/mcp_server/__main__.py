@@ -25,8 +25,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("PORT") or os.getenv("MCP_PORT") or "8002"),
-        help="Port for HTTP server (default: 8002, or PORT/MCP_PORT env var)"
+        default=int(os.getenv("PORT") or os.getenv("MCP_PORT") or "8001"),
+        help="Port for HTTP server (default: 8001, or PORT/MCP_PORT env var)"
     )
     parser.add_argument(
         "--host",

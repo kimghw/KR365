@@ -24,7 +24,7 @@ dashboard_sessions = {}  # {session_token: {"username": "admin", "created_at": t
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / ".env"
-UNIFIED_PID_FILE = Path("/tmp/unified_server.pid")
+MAIL_QUERY_PID_FILE = Path("/tmp/mail_query_fastapi.pid")
 QUICK_TUNNEL_PID_FILE = Path("/tmp/quick_tunnel.pid")
 
 
@@ -87,17 +87,17 @@ class DashboardService:
 
     @staticmethod
     def start_server() -> Dict:
-        """Start unified MCP server"""
+        """Start Mail Query MCP server"""
         try:
-            if UNIFIED_PID_FILE.exists():
-                pid = int(UNIFIED_PID_FILE.read_text().strip())
+            if MAIL_QUERY_PID_FILE.exists():
+                pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
                 result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
                 if result.returncode == 0:
                     return {"success": False, "error": "Server is already running", "pid": pid}
 
             # Start server
-            server_script = PROJECT_ROOT / "entrypoints" / "production" / "unified_http_server.py"
-            log_file = LOG_DIR / "unified_server.log"
+            server_script = PROJECT_ROOT / "modules" / "mail_query_MCP" / "entrypoints" / "run_fastapi.py"
+            log_file = LOG_DIR / "mail_query_fastapi.log"
 
             # Load environment variables from .env file
             env = os.environ.copy()
@@ -119,8 +119,8 @@ class DashboardService:
             )
 
             # Save PID
-            UNIFIED_PID_FILE.write_text(str(process.pid))
-            logger.info(f"Started unified server with PID: {process.pid}")
+            MAIL_QUERY_PID_FILE.write_text(str(process.pid))
+            logger.info(f"Started Mail Query MCP server with PID: {process.pid}")
 
             return {"success": True, "pid": process.pid}
         except Exception as e:
@@ -129,12 +129,12 @@ class DashboardService:
 
     @staticmethod
     def stop_server() -> Dict:
-        """Stop unified MCP server"""
+        """Stop Mail Query MCP server"""
         try:
-            if not UNIFIED_PID_FILE.exists():
+            if not MAIL_QUERY_PID_FILE.exists():
                 return {"success": False, "error": "Server is not running"}
 
-            pid = int(UNIFIED_PID_FILE.read_text().strip())
+            pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
 
             # Kill process
             try:
@@ -147,8 +147,8 @@ class DashboardService:
                 if result.returncode == 0:
                     subprocess.run(["kill", "-9", str(pid)])
 
-                UNIFIED_PID_FILE.unlink()
-                logger.info(f"Stopped unified server (PID: {pid})")
+                MAIL_QUERY_PID_FILE.unlink()
+                logger.info(f"Stopped Mail Query MCP server (PID: {pid})")
                 return {"success": True, "pid": pid}
             except subprocess.CalledProcessError as e:
                 return {"success": False, "error": f"Failed to kill process: {e}"}
@@ -157,15 +157,22 @@ class DashboardService:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def start_tunnel() -> Dict:
-        """Start Cloudflare Quick Tunnel"""
+    def start_tunnel(port: int = None) -> Dict:
+        """Start Cloudflare Quick Tunnel
+
+        Args:
+            port: Port number to tunnel (default: 8001 for Mail Query MCP server)
+        """
         try:
+            # Use default port 8001 if not specified
+            tunnel_port = port if port else int(os.getenv("MAIL_API_PORT", "8001"))
+
             # Check if already running
             if QUICK_TUNNEL_PID_FILE.exists():
                 pid = int(QUICK_TUNNEL_PID_FILE.read_text().strip())
                 result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
                 if result.returncode == 0:
-                    return {"success": False, "error": "Tunnel is already running", "pid": pid}
+                    return {"success": False, "error": f"Tunnel is already running (PID: {pid})", "pid": pid}
 
             # Check if cloudflared exists
             cloudflared_result = subprocess.run(["which", "cloudflared"], capture_output=True, text=True)
@@ -175,9 +182,10 @@ class DashboardService:
             cloudflared_bin = cloudflared_result.stdout.strip()
             log_file = LOG_DIR / "quick_tunnel.log"
 
-            # Start tunnel
+            # Start tunnel with specified port
+            logger.info(f"Starting Cloudflare tunnel for port {tunnel_port}")
             process = subprocess.Popen(
-                [cloudflared_bin, "tunnel", "--url", "http://localhost:8000"],
+                [cloudflared_bin, "tunnel", "--url", f"http://localhost:{tunnel_port}"],
                 stdout=open(log_file, 'w'),
                 stderr=subprocess.STDOUT,
                 cwd=PROJECT_ROOT
@@ -200,15 +208,16 @@ class DashboardService:
                         tunnel_url = match.group(0)
                         # Save to .env
                         DashboardService.update_env_variable('CLOUDFLARE_TUNNEL_URL', tunnel_url)
-                        DashboardService.update_env_variable('DCR_OAUTH_REDIRECT_URI', f'{tunnel_url}/oauth/azure_callback')
+                        DashboardService.update_env_variable('DCR_OAUTH_REDIRECT_URI', f'{tunnel_url}/auth/callback')
                         DashboardService.update_env_variable('AUTO_REGISTER_OAUTH_REDIRECT_URI', f'{tunnel_url}/enrollment/callback')
                         break
 
             return {
                 "success": True,
                 "pid": process.pid,
+                "port": tunnel_port,
                 "url": tunnel_url,
-                "message": "Tunnel started. URL will appear in a few seconds." if not tunnel_url else f"Tunnel started: {tunnel_url}"
+                "message": f"Tunnel started on port {tunnel_port}. URL will appear in a few seconds." if not tunnel_url else f"Tunnel started on port {tunnel_port}: {tunnel_url}"
             }
         except Exception as e:
             logger.error(f"Error starting tunnel: {e}")
@@ -256,10 +265,35 @@ class DashboardService:
 
     @staticmethod
     def get_server_status() -> Dict:
-        """Get unified server status"""
+        """Get Mail Query MCP server status"""
         try:
-            if UNIFIED_PID_FILE.exists():
-                pid = int(UNIFIED_PID_FILE.read_text().strip())
+            # First check if server is responding on port 8001
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('localhost', 8001))
+            sock.close()
+
+            if result == 0:
+                # Server is running, try to get PID
+                pid = None
+                if MAIL_QUERY_PID_FILE.exists():
+                    try:
+                        pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
+                        # Verify PID is valid
+                        subprocess.run(["ps", "-p", str(pid)], check=True, capture_output=True)
+                    except:
+                        pid = None
+
+                return {
+                    "status": "running",
+                    "pid": pid if pid else "unknown",
+                    "endpoint": "http://localhost:8001"
+                }
+
+            # If not running on port, check PID file
+            if MAIL_QUERY_PID_FILE.exists():
+                pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
                 # Check if process is running
                 result = subprocess.run(
                     ["ps", "-p", str(pid), "-o", "comm="],
@@ -268,10 +302,11 @@ class DashboardService:
                 )
                 if result.returncode == 0 and "python" in result.stdout:
                     return {
-                        "status": "running",
+                        "status": "starting",
                         "pid": pid,
-                        "endpoint": "http://localhost:8000"
+                        "endpoint": "http://localhost:8001"
                     }
+
             return {"status": "stopped"}
         except Exception as e:
             logger.error(f"Error getting server status: {e}")
@@ -305,6 +340,23 @@ class DashboardService:
                     pid = int(result.stdout.strip().split()[0])
 
             if pid:
+                # Try to extract port from process info
+                tunnel_port = None
+                try:
+                    ps_result = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "args="],
+                        capture_output=True,
+                        text=True
+                    )
+                    if ps_result.returncode == 0:
+                        # Extract port from command like: cloudflared tunnel --url http://localhost:8001
+                        import re
+                        port_match = re.search(r'--url\s+https?://localhost:(\d+)', ps_result.stdout)
+                        if port_match:
+                            tunnel_port = int(port_match.group(1))
+                except:
+                    pass
+
                 # Method 1: Try to get URL from log file
                 log_file = LOG_DIR / "quick_tunnel.log"
                 if log_file.exists():
@@ -339,6 +391,7 @@ class DashboardService:
                 return {
                     "status": "running",
                     "pid": pid,
+                    "port": tunnel_port if tunnel_port else "unknown",
                     "url": tunnel_url
                 }
 
@@ -1400,7 +1453,7 @@ def create_dashboard_routes() -> List[Route]:
         <div class="grid">
             <!-- Server Status -->
             <div class="card">
-                <h2>🖥️ Unified Server</h2>
+                <h2>📧 Mail Query MCP Server</h2>
                 <div id="server-status">Loading...</div>
                 <div style="margin-top: 15px; display: flex; gap: 10px;">
                     <button class="btn btn-primary" onclick="startServer()" style="flex: 1;">▶️ Start Server</button>
@@ -1412,9 +1465,13 @@ def create_dashboard_routes() -> List[Route]:
             <div class="card">
                 <h2>🌐 Cloudflare Tunnel</h2>
                 <div id="tunnel-status">Loading...</div>
-                <div style="margin-top: 15px; display: flex; gap: 10px;">
-                    <button class="btn btn-primary" onclick="startTunnel()" style="flex: 1;">▶️ Start Tunnel</button>
-                    <button class="btn btn-danger" onclick="stopTunnel()" style="flex: 1;">⏹️ Stop Tunnel</button>
+                <div style="margin-top: 15px;">
+                    <label for="tunnel-port" style="display: block; margin-bottom: 5px;">Tunnel Port:</label>
+                    <input type="number" id="tunnel-port" value="8001" min="1" max="65535" style="width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-primary" onclick="startTunnelWithPort()" style="flex: 1;">▶️ Start Tunnel</button>
+                        <button class="btn btn-danger" onclick="stopTunnel()" style="flex: 1;">⏹️ Stop Tunnel</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1601,6 +1658,11 @@ def create_dashboard_routes() -> List[Route]:
                         <span class="info-label">PID:</span>
                         <span class="info-value">${data.tunnel.pid}</span>
                     </div>
+                    ${data.tunnel.port ? `
+                    <div class="info-row">
+                        <span class="info-label">Port:</span>
+                        <span class="info-value">${data.tunnel.port}</span>
+                    </div>` : ''}
                     ${data.tunnel.url ? `
                     <div class="info-row">
                         <span class="info-label">Public URL:</span>
@@ -1864,11 +1926,17 @@ def create_dashboard_routes() -> List[Route]:
             }
         }
 
-        // Start tunnel
-        async function startTunnel() {
+        // Start tunnel with specified port
+        async function startTunnelWithPort() {
             try {
-                showToast('Starting tunnel... This may take up to 20 seconds.');
-                const response = await fetch('/dashboard/api/tunnel/start', {method: 'POST'});
+                const port = document.getElementById('tunnel-port').value;
+                showToast(`Starting tunnel on port ${port}... This may take up to 20 seconds.`);
+
+                const response = await fetch('/dashboard/api/tunnel/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({port: parseInt(port)})
+                });
                 const data = await response.json();
 
                 if (data.success) {
@@ -1881,6 +1949,11 @@ def create_dashboard_routes() -> List[Route]:
                 console.error('Error starting tunnel:', error);
                 showToast('Error starting tunnel');
             }
+        }
+
+        // Backward compatibility
+        async function startTunnel() {
+            startTunnelWithPort();
         }
 
         // Stop tunnel
@@ -2312,20 +2385,27 @@ def create_dashboard_routes() -> List[Route]:
 
     # API: Start server
     async def api_start_server(request):
-        """Start unified server"""
+        """Start Mail Query MCP server"""
         result = service.start_server()
         return JSONResponse(result)
 
     # API: Stop server
     async def api_stop_server(request):
-        """Stop unified server"""
+        """Stop Mail Query MCP server"""
         result = service.stop_server()
         return JSONResponse(result)
 
     # API: Start tunnel
     async def api_start_tunnel(request):
-        """Start Cloudflare tunnel"""
-        result = service.start_tunnel()
+        """Start Cloudflare tunnel with optional port"""
+        try:
+            # Get port from request body if provided
+            body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
+            port = body.get('port')
+            result = service.start_tunnel(port=port)
+        except:
+            # Fallback to default if no port provided
+            result = service.start_tunnel()
         return JSONResponse(result)
 
     # API: Stop tunnel

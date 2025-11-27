@@ -22,7 +22,7 @@ from starlette.routing import Route, Mount
 from infra.core.auth_logger import get_auth_logger
 from infra.core.database import get_database_manager
 from infra.core.logger import get_logger
-from .handlers import MCPHandlers
+from ..mcp_server.handlers import MCPHandlers
 
 logger = get_logger(__name__)
 auth_logger = get_auth_logger()
@@ -30,10 +30,13 @@ auth_logger = get_auth_logger()
 
 class HTTPStreamingMailAttachmentServer:
     """HTTP Streaming-based MCP Server for Mail Attachments"""
-    
-    def __init__(self, host: str = "0.0.0.0", port: int = 8002):
+
+    def __init__(self, host: str = "0.0.0.0", port: int = 8001):
         self.host = host
         self.port = port
+
+        # Server name for DCR (config.json에서 로드)
+        self.server_name = self._load_server_name_from_config()
 
         # MCP Server
         self.mcp_server = Server("email-mcp-server")
@@ -57,7 +60,22 @@ class HTTPStreamingMailAttachmentServer:
         self.app = self._create_fastapi_wrapper()
 
         logger.info(f"🚀 HTTP Streaming Mail Attachment Server initialized on port {port}")
-    
+
+    def _load_server_name_from_config(self) -> str:
+        """config.json에서 DCR OAuth module_name을 읽어옴"""
+        from pathlib import Path
+        config_path = Path(__file__).parent.parent / "config.json"
+        if config_path.exists():
+            try:
+                with open(config_path) as f:
+                    config_data = json.load(f)
+                    module_name = config_data.get("dcr_oauth", {}).get("module_name", "mail_query")
+                    logger.info(f"📋 Loaded DCR module_name from config: {module_name}")
+                    return module_name
+            except Exception as e:
+                logger.warning(f"config.json 읽기 실패: {e}")
+        return "mail_query"
+
     def _initialize_and_check_auth(self):
         """Initialize database connection and check authentication status"""
         logger.info("🔍 Initializing database and checking authentication...")
@@ -294,7 +312,7 @@ class HTTPStreamingMailAttachmentServer:
                     # 2순위: accounts 테이블에서 기본 계정 조회 (인증 없이 접근하는 경우)
                     logger.info("🔍 No authenticated user, attempting fallback to default account...")
                     try:
-                        from .handlers import get_default_user_id
+                        from ..mcp_server.handlers import get_default_user_id
                         auto_user_id = get_default_user_id()
 
                         if auto_user_id:
@@ -689,7 +707,7 @@ class HTTPStreamingMailAttachmentServer:
                 body = await request.body()
                 request_data = json.loads(body) if body else {}
 
-                dcr_service = DCRService()
+                dcr_service = DCRService(module_name=self.server_name)
                 response = await dcr_service.register_client(request_data)
 
                 logger.info(f"✅ DCR client registered: {response['client_id']}")
@@ -720,7 +738,7 @@ class HTTPStreamingMailAttachmentServer:
             from modules.dcr_oauth import DCRService
 
             client_id = request.path_params.get("client_id")
-            dcr_service = DCRService()
+            dcr_service = DCRService(module_name=self.server_name)
 
             # GET - Read client configuration
             if request.method == "GET":
@@ -774,7 +792,7 @@ class HTTPStreamingMailAttachmentServer:
                 )
 
             # Verify client
-            dcr_service = DCRService()
+            dcr_service = DCRService(module_name=self.server_name)
             client = dcr_service.get_client(client_id)
 
             if not client:
@@ -849,7 +867,7 @@ class HTTPStreamingMailAttachmentServer:
                 )
 
             # Get original request from our auth_code
-            dcr_service = DCRService()
+            dcr_service = DCRService(module_name=self.server_name)
             # state is our authorization code
             # We'll exchange Azure code for token and then redirect back to client
 
@@ -922,7 +940,7 @@ class HTTPStreamingMailAttachmentServer:
                 client_secret = form.get("client_secret")
 
                 # Verify client credentials (both grant types require this)
-                dcr_service = DCRService()
+                dcr_service = DCRService(module_name=self.server_name)
                 if not dcr_service.verify_client_credentials(client_id, client_secret):
                     return JSONResponse(
                         {"error": "invalid_client"},

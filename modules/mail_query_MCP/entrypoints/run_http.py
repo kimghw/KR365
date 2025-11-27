@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from modules.mail_query_MCP.mcp_server.http_server import HTTPStreamingMailAttachmentServer
+from modules.mail_query_MCP.implementations.starlette_server import HTTPStreamingMailAttachmentServer
 from infra.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,8 +25,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("MCP_PORT") or os.getenv("PORT") or "8002"),
-        help="Port for HTTP server (default: 8002, or MCP_PORT/PORT env var)"
+        default=int(os.getenv("MCP_PORT") or os.getenv("PORT") or "8001"),
+        help="Port for HTTP server (default: 8001, or MCP_PORT/PORT env var)"
     )
     parser.add_argument(
         "--host",
