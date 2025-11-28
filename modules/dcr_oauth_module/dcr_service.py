@@ -425,7 +425,7 @@ class DCRService:
             "client_id": dcr_client_id,
             "client_secret": dcr_client_secret,
             "client_id_issued_at": issued_at,
-            "client_secret_expires_at": 0,
+            # client_secret_expires_at 생략 = 만료되지 않음 (RFC 7591)
             "grant_types": grant_types,
             "client_name": client_name,
             "redirect_uris": redirect_uris,
@@ -875,11 +875,18 @@ class DCRService:
                 logger.warning(f"❌ PKCE verification failed")
                 return None
 
-        # Mark as used
-        self._execute_query(
-            f"UPDATE {self._get_table_name('dcr_tokens')} SET dcr_status = 'expired' WHERE dcr_token_value = ?",
+        # Mark as used (atomic operation to prevent race condition)
+        affected_rows = self._execute_query(
+            f"UPDATE {self._get_table_name('dcr_tokens')} "
+            f"SET dcr_status = 'expired' "
+            f"WHERE dcr_token_value = ? AND dcr_status = 'active'",
             (code,),
         )
+
+        if affected_rows == 0:
+            # 이미 사용되었거나 없는 코드
+            logger.warning("❌ Authorization code already used or not found")
+            return None
 
         return {
             "scope": metadata.get("scope"),
@@ -1056,66 +1063,105 @@ class DCRService:
                 azure_expires_at=azure_expires_at,
             )
 
-        # 2) 기존 active Bearer 토큰을 무효화 (같은 클라이언트 & 사용자)
-        invalidate_query = f"""
-        UPDATE {self._get_table_name('dcr_tokens')}
-        SET dcr_status = 'revoked'
+        # 2) 기존 active Bearer 토큰 확인 및 업데이트
+        check_bearer_query = f"""
+        SELECT COUNT(*) FROM {self._get_table_name('dcr_tokens')}
         WHERE dcr_client_id = ?
           AND azure_object_id = ?
           AND dcr_token_type = 'Bearer'
           AND dcr_status = 'active'
         """
-        self._execute_query(invalidate_query, (dcr_client_id, azure_object_id))
+        existing_bearer = self._fetch_one(check_bearer_query, (dcr_client_id, azure_object_id))
+        has_bearer = existing_bearer and existing_bearer[0] > 0
 
-        # 3) dcr_tokens에 새 DCR access token 저장
-        dcr_query = f"""
-        INSERT INTO {self._get_table_name('dcr_tokens')} (
-            dcr_token_value, dcr_client_id, dcr_token_type, azure_object_id, expires_at, dcr_status
-        ) VALUES (?, ?, 'Bearer', ?, ?, 'active')
-        """
-
-        self._execute_query(
-            dcr_query,
-            (
-                self.crypto.account_encrypt_sensitive_data(dcr_access_token),
-                dcr_client_id,
-                azure_object_id,
-                dcr_expires_at,
-            ),
-        )
-
-        logger.info(
-            f"✅ Stored DCR token for client: {dcr_client_id} (revoked old tokens)"
-        )
-
-        # 4) DCR refresh token 저장
-        if dcr_refresh_token:
-            # 기존 refresh 토큰 무효화
-            invalidate_refresh = f"""
+        if has_bearer:
+            # 기존 Bearer 토큰 업데이트
+            update_bearer_query = f"""
             UPDATE {self._get_table_name('dcr_tokens')}
-            SET dcr_status = 'revoked'
+            SET dcr_token_value = ?, expires_at = ?
+            WHERE dcr_client_id = ?
+              AND azure_object_id = ?
+              AND dcr_token_type = 'Bearer'
+              AND dcr_status = 'active'
+            """
+            self._execute_query(
+                update_bearer_query,
+                (
+                    self.crypto.account_encrypt_sensitive_data(dcr_access_token),
+                    dcr_expires_at,
+                    dcr_client_id,
+                    azure_object_id,
+                ),
+            )
+            logger.info(f"✅ Updated DCR Bearer token for client: {dcr_client_id}")
+        else:
+            # 3) 새 Bearer 토큰 삽입 (최초 발급)
+            insert_bearer_query = f"""
+            INSERT INTO {self._get_table_name('dcr_tokens')} (
+                dcr_token_value, dcr_client_id, dcr_token_type, azure_object_id, expires_at, dcr_status
+            ) VALUES (?, ?, 'Bearer', ?, ?, 'active')
+            """
+            self._execute_query(
+                insert_bearer_query,
+                (
+                    self.crypto.account_encrypt_sensitive_data(dcr_access_token),
+                    dcr_client_id,
+                    azure_object_id,
+                    dcr_expires_at,
+                ),
+            )
+            logger.info(f"✅ Inserted new DCR Bearer token for client: {dcr_client_id}")
+
+        # 4) DCR refresh token 저장 (새로 제공된 경우에만)
+        if dcr_refresh_token:
+            # 기존 refresh 토큰 확인
+            check_refresh_query = f"""
+            SELECT COUNT(*) FROM {self._get_table_name('dcr_tokens')}
             WHERE dcr_client_id = ?
               AND dcr_token_type = 'refresh'
               AND dcr_status = 'active'
             """
-            self._execute_query(invalidate_refresh, (dcr_client_id,))
+            existing_refresh = self._fetch_one(check_refresh_query, (dcr_client_id,))
+            has_refresh = existing_refresh and existing_refresh[0] > 0
 
-            # 새 refresh 토큰 저장 (azure_object_id 포함)
             refresh_expires = datetime.now(timezone.utc) + timedelta(days=30)
-            refresh_query = f"""
-            INSERT INTO {self._get_table_name('dcr_tokens')} (
-                dcr_token_value, dcr_client_id, dcr_token_type, azure_object_id, expires_at, dcr_status
-            ) VALUES (?, ?, 'refresh', ?, ?, 'active')
-            """
-            self._execute_query(
-                refresh_query,
-                (
-                    self.crypto.account_encrypt_sensitive_data(dcr_refresh_token),
-                    dcr_client_id,
-                    azure_object_id,
-                    refresh_expires,
-                ),
-            )
+
+            if has_refresh:
+                # 기존 refresh 토큰 업데이트
+                update_refresh_query = f"""
+                UPDATE {self._get_table_name('dcr_tokens')}
+                SET dcr_token_value = ?, expires_at = ?, azure_object_id = ?
+                WHERE dcr_client_id = ?
+                  AND dcr_token_type = 'refresh'
+                  AND dcr_status = 'active'
+                """
+                self._execute_query(
+                    update_refresh_query,
+                    (
+                        self.crypto.account_encrypt_sensitive_data(dcr_refresh_token),
+                        refresh_expires,
+                        azure_object_id,
+                        dcr_client_id,
+                    ),
+                )
+                logger.info(f"✅ Updated DCR refresh token for client: {dcr_client_id}")
+            else:
+                # 새 refresh 토큰 삽입 (최초 발급)
+                insert_refresh_query = f"""
+                INSERT INTO {self._get_table_name('dcr_tokens')} (
+                    dcr_token_value, dcr_client_id, dcr_token_type, azure_object_id, expires_at, dcr_status
+                ) VALUES (?, ?, 'refresh', ?, ?, 'active')
+                """
+                self._execute_query(
+                    insert_refresh_query,
+                    (
+                        self.crypto.account_encrypt_sensitive_data(dcr_refresh_token),
+                        dcr_client_id,
+                        azure_object_id,
+                        refresh_expires,
+                    ),
+                )
+                logger.info(f"✅ Inserted new DCR refresh token for client: {dcr_client_id}")
 
         # 5) dcr_clients_{module_name} 테이블 업데이트 (azure_object_id, user_email 등)
         try:
