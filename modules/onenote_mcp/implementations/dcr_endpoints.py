@@ -553,10 +553,12 @@ def add_dcr_endpoints(app):
             new_refresh_token = secrets.token_urlsafe(32)
 
             # Parse Azure token expiry
-            if isinstance(new_azure_tokens["expiry"], str):
-                azure_expiry = datetime.fromisoformat(new_azure_tokens["expiry"])
+            # oauth_client returns 'expiry' not 'expiry_time'
+            expiry_value = new_azure_tokens.get("expiry") or new_azure_tokens.get("expiry_time")
+            if isinstance(expiry_value, str):
+                azure_expiry = datetime.fromisoformat(expiry_value)
             else:
-                azure_expiry = new_azure_tokens["expiry"]
+                azure_expiry = expiry_value
 
             # Store new tokens
             dcr_service.store_tokens(

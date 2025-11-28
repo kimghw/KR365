@@ -142,8 +142,10 @@ def add_dcr_endpoints(app):
             )
 
         # Map to Azure AD redirect URI (our callback)
-        # Use localhost:8001 to match Azure AD app registration
-        azure_redirect_uri = "http://localhost:8001/oauth/azure_callback"
+        # Use port from environment or default
+        import os
+        port = int(os.getenv("MAIL_API_PORT", "8001"))
+        azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
 
         # Store original request for callback (with PKCE support)
         auth_code = dcr_service.create_authorization_code(
@@ -219,7 +221,8 @@ def add_dcr_endpoints(app):
             import httpx
 
             oauth_client = get_oauth_client()
-            azure_redirect_uri = "http://localhost:8001/oauth/azure_callback"
+            port = int(os.getenv("MAIL_API_PORT", "8001"))
+            azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
 
             # Exchange Azure code for access token
             token_info = await oauth_client.exchange_code_for_tokens_with_account_config(
