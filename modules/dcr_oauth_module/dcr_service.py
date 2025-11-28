@@ -1425,7 +1425,7 @@ class DCRService:
         """mail_query.db의 accounts 테이블과 동기화"""
         try:
             # mail_query.db 연결
-            from modules.mail_query_MCP.implementations.database_manager import get_mail_query_database
+            from modules.outlook_mcp.implementations.database_manager import get_mail_query_database
 
             mail_db = get_mail_query_database()
 

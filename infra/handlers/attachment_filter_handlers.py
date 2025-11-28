@@ -16,7 +16,7 @@ from mcp.types import Tool, TextContent
 from infra.core.config import get_config
 from infra.core.logger import get_logger
 from infra.utils.datetime_parser import parse_date_range, Timezone
-from modules.mail_query import (
+from modules.outlook_mail_query import (
     MailQueryOrchestrator,
     MailQueryRequest,
     MailQuerySeverFilters,

@@ -169,7 +169,7 @@ class LoggingConfig:
                 log_dir.mkdir(parents=True, exist_ok=True)
                 return log_dir / 'mcp_server.log'
 
-            # modules.account.*, modules.auth.*, modules.mail_query.* 등
+            # modules.account.*, modules.auth.*, modules.outlook_mail_query.* 등
             elif len(parts) >= 2:
                 module_name = parts[1]  # account, auth, mail_query 등
                 log_dir = self.log_dir / 'modules'

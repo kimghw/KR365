@@ -20,7 +20,7 @@ security = HTTPBearer(auto_error=False)
 class DCRAuthenticator:
     """DCR OAuth2 인증 관리자"""
 
-    def __init__(self, server_name: str = "mail_query"):
+    def __init__(self, server_name: str = "onenote"):
         self.server_name = server_name
         self._dcr_service = None
 
@@ -43,19 +43,20 @@ class DCRAuthenticator:
         path = request.url.path
         method = request.method
 
-        # 인증 제외 경로 (OAuth 플로우에 꼭 필요한 경로만)
+        # 인증 제외 경로 (보안: 최소한의 경로만 제외)
         excluded_paths = [
-            "/.well-known",              # OAuth discovery (필수)
-            "/oauth/register",           # DCR 클라이언트 등록 (필수)
-            "/oauth/authorize",          # OAuth 인증 시작 (필수)
-            "/oauth/azure_callback",     # Azure AD 콜백 (필수)
-            "/oauth/token",              # 토큰 발급 (필수)
-            "/health",                   # 헬스체크 (모니터링용)
+            "/.well-known",
+            "/oauth/register",           # DCR 클라이언트 등록
+            "/oauth/authorize",          # OAuth 인증 시작
+            "/oauth/azure_callback",     # Azure AD 콜백
+            "/oauth/.well-known",        # OAuth 디스커버리
+            "/health",
+            "/dashboard",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/info"
         ]
-        # 주의: 아래 경로는 인증 필요
-        # - /docs, /redoc, /openapi.json: API 문서 (인증 필요)
-        # - /dashboard: 대시보드 (인증 필요)
-        # - /info: 서버 정보 (인증 필요)
 
         # 제외 경로 체크
         for excluded in excluded_paths:
@@ -77,17 +78,6 @@ class DCRAuthenticator:
         if not credentials:
             logger.warning(f"⚠️ Missing Bearer token for path: {path}")
 
-            # Get base URL from request for dynamic endpoint discovery
-            base_url = f"{request.url.scheme}://{request.url.netloc}"
-
-            # RFC 6750 + OAuth 2.0 Discovery: WWW-Authenticate 헤더에 인증 엔드포인트 정보 포함
-            www_authenticate = (
-                f'Bearer realm="MCP Server", '
-                f'authorization_uri="{base_url}/oauth/authorize", '
-                f'token_uri="{base_url}/oauth/token", '
-                f'registration_uri="{base_url}/oauth/register"'
-            )
-
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -96,17 +86,11 @@ class DCRAuthenticator:
                     "data": {
                         "reason": "Missing Bearer token",
                         "path": path,
-                        "hint": "Register client at /oauth/register, then authenticate via /oauth/authorize",
-                        "oauth_endpoints": {
-                            "registration": f"{base_url}/oauth/register",
-                            "authorization": f"{base_url}/oauth/authorize",
-                            "token": f"{base_url}/oauth/token",
-                            "discovery": f"{base_url}/.well-known/oauth-authorization-server"
-                        }
+                        "hint": "Include Authorization: Bearer <token> header"
                     }
                 },
                 headers={
-                    "WWW-Authenticate": www_authenticate
+                    "WWW-Authenticate": 'Bearer realm="MCP Server"'
                 }
             )
 
@@ -131,8 +115,6 @@ class DCRAuthenticator:
                     user_email = None
                     azure_token = None
 
-                # 성공 로그
-
                 logger.info(f"✅ Token verified for {path} (client: {dcr_client_id}, user: {user_id})")
 
                 return {
@@ -146,34 +128,17 @@ class DCRAuthenticator:
                 # 토큰이 유효하지 않은 경우
                 logger.warning(f"⚠️ Invalid Bearer token for path: {path}")
 
-                # Get base URL for OAuth endpoint discovery
-                base_url = f"{request.url.scheme}://{request.url.netloc}"
-
-                # RFC 6750: WWW-Authenticate with error details and OAuth endpoints
-                www_authenticate = (
-                    f'Bearer realm="MCP Server", '
-                    f'error="invalid_token", '
-                    f'error_description="The access token is invalid or expired", '
-                    f'authorization_uri="{base_url}/oauth/authorize", '
-                    f'token_uri="{base_url}/oauth/token"'
-                )
-
                 raise HTTPException(
                     status_code=401,
                     detail={
                         "code": -32001,
                         "message": "Invalid or expired token",
                         "data": {
-                            "reason": "Token validation failed",
-                            "hint": "Obtain a new token using refresh_token grant or re-authenticate",
-                            "oauth_endpoints": {
-                                "token": f"{base_url}/oauth/token",
-                                "authorization": f"{base_url}/oauth/authorize"
-                            }
+                            "hint": "Token may have expired. Please re-authenticate."
                         }
                     },
                     headers={
-                        "WWW-Authenticate": www_authenticate
+                        "WWW-Authenticate": 'Bearer realm="MCP Server", error="invalid_token"'
                     }
                 )
 
@@ -203,10 +168,10 @@ def _get_module_name_from_config() -> str:
         try:
             with open(config_path) as f:
                 config = json.load(f)
-                return config.get("dcr_oauth", {}).get("module_name", "mail_query")
+                return config.get("dcr_oauth", {}).get("module_name", "onenote")
         except Exception as e:
             logger.warning(f"config.json 읽기 실패: {e}")
-    return "mail_query"
+    return "onenote"
 
 authenticator = DCRAuthenticator(server_name=_get_module_name_from_config())
 

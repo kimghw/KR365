@@ -11,4 +11,4 @@ export PYTHONDONTWRITEBYTECODE=1
 export ENABLE_CONSOLE_LOGGING=false
 
 # Run the mail query MCP server in STDIO mode
-exec python3 "$PROJECT_ROOT/modules/mail_query_MCP/entrypoints/run_stdio.py"
+exec python3 "$PROJECT_ROOT/modules/outlook_mcp/entrypoints/run_stdio.py"

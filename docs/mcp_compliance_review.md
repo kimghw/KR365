@@ -2,10 +2,10 @@
 
 ## 주요 이슈 요약
 - `modules/calendar_mcp/entrypoints/stdio_server.py`가 `CalendarHandlers`에 없는 `handle_list_tools`/`handle_call_tool`을 호출해 stdio 모드에서 tools/list·tools/call가 동작하지 않음.
-- 여러 HTTP MCP 서버가 `initialize` 응답의 `protocolVersion` 기본값을 `"2025-06-18"`로 고정(`modules/mail_query_MCP/mcp_server/http_server.py`, `modules/onedrive_mcp/mcp_server/http_server.py`, `modules/onenote_mcp/mcp_server/http_server.py`, `modules/teams_mcp/mcp_server/http_server.py`, `modules/mail_iacs/mcp_server/http_server.py`). 공식 MCP 버전과 달라 호환성 문제가 발생할 수 있음.
+- 여러 HTTP MCP 서버가 `initialize` 응답의 `protocolVersion` 기본값을 `"2025-06-18"`로 고정(`modules/outlook_mcp/mcp_server/http_server.py`, `modules/onedrive_mcp/mcp_server/http_server.py`, `modules/onenote_mcp/mcp_server/http_server.py`, `modules/teams_mcp/mcp_server/http_server.py`, `modules/mail_iacs/mcp_server/http_server.py`). 공식 MCP 버전과 달라 호환성 문제가 발생할 수 있음.
 - OneDrive HTTP MCP 서버(`modules/onedrive_mcp/mcp_server/http_server.py`)는 `initialize` 응답에 `Mcp-Session-Id` 헤더를 보내지 않아 세션 재사용이 불가능함(다른 서버들과 불일치).
-- Mail Query/ IACS HTTP MCP 서버가 `notifications/initialized` 후 list_changed 알림을 실제로 전송하지 않고 로그만 남김(`modules/mail_query_MCP/mcp_server/http_server.py`, `modules/mail_iacs/mcp_server/http_server.py`). capabilities에는 listChanged가 true로 표시되어 있어 클라이언트 기대와 불일치.
-- Mail Query MCP에서 `handle_get_prompt`는 구현되어 있지만 `handle_list_prompts`가 빈 목록을 반환(`modules/mail_query_MCP/mcp_server/handlers.py`), prompts 기능이 발견되지 않음.
+- Mail Query/ IACS HTTP MCP 서버가 `notifications/initialized` 후 list_changed 알림을 실제로 전송하지 않고 로그만 남김(`modules/outlook_mcp/mcp_server/http_server.py`, `modules/mail_iacs/mcp_server/http_server.py`). capabilities에는 listChanged가 true로 표시되어 있어 클라이언트 기대와 불일치.
+- Mail Query MCP에서 `handle_get_prompt`는 구현되어 있지만 `handle_list_prompts`가 빈 목록을 반환(`modules/outlook_mcp/mcp_server/handlers.py`), prompts 기능이 발견되지 않음.
 - 여러 서버가 `resources` capability를 true로 광고하지만 `resources/read`가 미구현되어 “method not found”가 발생(리소스 미지원이면 capability를 빼야 함).
 
 ## 개선 제안

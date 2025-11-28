@@ -23,10 +23,10 @@ def _get_module_name_from_config() -> str:
         try:
             with open(config_path) as f:
                 config = json.load(f)
-                return config.get("dcr_oauth", {}).get("module_name", "mail_query")
+                return config.get("dcr_oauth", {}).get("module_name", "onenote")
         except Exception as e:
             logger.warning(f"config.json 읽기 실패: {e}")
-    return "mail_query"
+    return "onenote"
 
 
 def add_dcr_endpoints(app):
@@ -108,7 +108,7 @@ def add_dcr_endpoints(app):
         client_id: str,
         redirect_uri: str,
         response_type: str = "code",
-        scope: str = "Mail.Read User.Read",
+        scope: str = "Notes.Read Notes.ReadWrite User.Read",
         state: str = None,
         code_challenge: str = None,  # PKCE support
         code_challenge_method: str = "S256",  # PKCE support
@@ -131,7 +131,6 @@ def add_dcr_endpoints(app):
             )
 
         # Azure AD authorization URL - Get Azure config from DCR service
-        # DCRService loads Azure config during init, accessible via properties
         try:
             azure_tenant_id = dcr_service.azure_tenant_id
             azure_client_id = dcr_service.azure_application_id
@@ -142,8 +141,10 @@ def add_dcr_endpoints(app):
             )
 
         # Map to Azure AD redirect URI (our callback)
-        # Use localhost:8001 to match Azure AD app registration
-        azure_redirect_uri = "http://localhost:8001/oauth/azure_callback"
+        # Use port from environment or default
+        import os
+        port = int(os.getenv("ONENOTE_SERVER_PORT", "8003"))
+        azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
 
         # Store original request for callback (with PKCE support)
         auth_code = dcr_service.create_authorization_code(
@@ -161,7 +162,7 @@ def add_dcr_endpoints(app):
             "response_type": "code",
             "redirect_uri": azure_redirect_uri,
             "response_mode": "query",
-            "scope": "offline_access User.Read Mail.Read",
+            "scope": "offline_access User.Read Notes.Read Notes.ReadWrite",
             "state": auth_code,  # Use our code as state
         }
 
@@ -217,9 +218,11 @@ def add_dcr_endpoints(app):
         try:
             from infra.core.oauth_client import get_oauth_client
             import httpx
+            import os
 
             oauth_client = get_oauth_client()
-            azure_redirect_uri = "http://localhost:8001/oauth/azure_callback"
+            port = int(os.getenv("ONENOTE_SERVER_PORT", "8003"))
+            azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
 
             # Exchange Azure code for access token
             token_info = await oauth_client.exchange_code_for_tokens_with_account_config(
@@ -280,7 +283,7 @@ def add_dcr_endpoints(app):
                                 "display_name": display_name
                             }
 
-                            # Update authorization code (no need to set azure_object_id in tokens table)
+                            # Update authorization code
                             dcr_service.update_auth_code_with_object_id(state, azure_object_id, user_email, display_name)
                             logger.info(f"✅ Updated auth code {state[:10]}... with user: {user_email} (object_id: {azure_object_id})")
                             break  # Success, exit retry loop
@@ -292,11 +295,9 @@ def add_dcr_endpoints(app):
 
                             if attempt < max_retries - 1:
                                 import asyncio
-                                # Exponential backoff
                                 await asyncio.sleep(retry_delay * (2 ** attempt))
                                 continue
                             else:
-                                # Final attempt failed
                                 logger.error(f"❌ Graph API request failed after {max_retries} attempts: {last_error}")
                                 return JSONResponse(
                                     {
@@ -306,7 +307,6 @@ def add_dcr_endpoints(app):
                                     status_code=500
                                 )
                         else:
-                            # Non-retryable error (e.g., 401, 403)
                             logger.error(f"❌ Graph API request failed: {response.status_code} - {response.text}")
                             return JSONResponse(
                                 {
@@ -396,149 +396,118 @@ def add_dcr_endpoints(app):
         redirect_uri: str = Form(None),
         code_verifier: str = Form(None),  # PKCE support
         refresh_token: str = Form(None),
-        client_name: str = Form(None),  # For auto-registration
         request: Request = None
     ):
-        """OAuth Token Endpoint - RFC 6749 compliant with auto-registration"""
+        """OAuth Token Endpoint - RFC 6749 compliant"""
         from infra.core.oauth_client import get_oauth_client
         from datetime import datetime
 
         dcr_service = DCRService(module_name=MODULE_NAME)
 
-        # Check if client exists
-        client = dcr_service.get_client(client_id)
-
-        if not client:
-            # Auto-register client if not exists
-            logger.info(f"🔄 Client {client_id} not found. Auto-registering...")
-
-            registration_data = {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "client_name": client_name or f"Auto-registered client {client_id}",
-                "redirect_uris": [redirect_uri] if redirect_uri else [],
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "scope": "Mail.Read Mail.ReadWrite User.Read"
-            }
-
-            try:
-                registered_client = await dcr_service.register_client(registration_data)
-                logger.info(f"✅ Auto-registered client: {client_id}")
-            except Exception as e:
-                logger.error(f"❌ Auto-registration failed: {str(e)}")
-                return JSONResponse(
-                    {"error": "invalid_client", "error_description": f"Client not found and auto-registration failed: {str(e)}"},
-                    status_code=401
-                )
-        else:
-            # Verify client credentials
-            if not dcr_service.verify_client_credentials(client_id, client_secret):
-                return JSONResponse(
-                    {"error": "invalid_client", "error_description": "Invalid client credentials"},
-                    status_code=401
-                )
+        # Verify client credentials
+        if not dcr_service.verify_client_credentials(client_id, client_secret):
+            return JSONResponse(
+                {"error": "invalid_client"},
+                status_code=401
+            )
 
         # Authorization code grant
         if grant_type == "authorization_code":
-            if not code:
+            if not all([code, redirect_uri]):
                 return JSONResponse(
-                    {"error": "invalid_request", "error_description": "authorization code is required"},
+                    {"error": "invalid_request"},
                     status_code=400
                 )
 
-            # Try Azure AD authorization code exchange (treat `code` as Azure auth code)
-            logger.info(f"🔐 Attempting Azure AD token exchange with authorization code")
-
-            try:
-                from infra.core.oauth_client import get_oauth_client
-                import httpx
-
-                oauth_client = get_oauth_client()
-                azure_redirect_uri = "http://localhost:8001/oauth/azure_callback"
-
-                # Exchange Azure code for tokens
-                token_info = await oauth_client.exchange_code_for_tokens_with_account_config(
-                    authorization_code=code,
-                    client_id=dcr_service.azure_application_id,
-                    client_secret=dcr_service.azure_client_secret,
-                    tenant_id=dcr_service.azure_tenant_id,
-                    redirect_uri=azure_redirect_uri,
-                )
-
-                logger.info(f"✅ Azure token exchange successful")
-
-                # Fetch user info from Microsoft Graph API
-                async with httpx.AsyncClient(timeout=30.0) as http_client:
-                    headers = {"Authorization": f"Bearer {token_info['access_token']}"}
-                    response = await http_client.get("https://graph.microsoft.com/v1.0/me", headers=headers)
-
-                    if response.status_code != 200:
-                        logger.error(f"❌ Failed to fetch user info: {response.status_code} - {response.text}")
-                        return JSONResponse(
-                            {"error": "user_info_fetch_error", "error_description": f"Failed to fetch user info: HTTP {response.status_code}"},
-                            status_code=500
-                        )
-
-                    user_info = response.json()
-                    azure_object_id = user_info.get("id")
-                    user_email = user_info.get("mail") or user_info.get("userPrincipalName")
-                    user_name = user_info.get("displayName")
-
-                    if not azure_object_id or not user_email:
-                        logger.error(f"❌ Missing critical user info: object_id={azure_object_id}, email={user_email}")
-                        return JSONResponse(
-                            {"error": "user_info_incomplete", "error_description": "Missing object_id or email from Microsoft Graph API"},
-                            status_code=500
-                        )
-
-                    logger.info(f"✅ Fetched user info: {user_email} (object_id: {azure_object_id})")
-
-                # Generate DCR tokens
-                access_token = secrets.token_urlsafe(32)
-                new_refresh_token = secrets.token_urlsafe(32)
-
-                # Store tokens (dcr_service.store_tokens handles both dcr_azure_users and dcr_tokens)
-                from datetime import datetime, timedelta, timezone
-                azure_expiry = datetime.now(timezone.utc) + timedelta(seconds=token_info.get("expires_in", 3600))
-
-                dcr_service.store_tokens(
-                    dcr_client_id=client_id,
-                    dcr_access_token=access_token,
-                    dcr_refresh_token=new_refresh_token,
-                    expires_in=dcr_service.dcr_bearer_ttl_seconds,
-                    scope="Mail.Read Mail.ReadWrite User.Read",
-                    azure_object_id=azure_object_id,
-                    azure_access_token=token_info["access_token"],
-                    azure_refresh_token=token_info.get("refresh_token"),
-                    azure_expires_at=azure_expiry,
-                    user_email=user_email,
-                    user_name=user_name,
-                )
-
-                logger.info(f"✅ Token issued for DCR client: {client_id}, user: {user_email}")
-
+            # Verify authorization code (with PKCE support)
+            code_data = dcr_service.verify_authorization_code(
+                code, client_id, redirect_uri, code_verifier
+            )
+            if not code_data:
                 return JSONResponse(
-                    {
-                        "access_token": access_token,
-                        "token_type": "Bearer",
-                        "expires_in": dcr_service.dcr_bearer_ttl_seconds,
-                        "refresh_token": new_refresh_token,
-                        "scope": "Mail.Read Mail.ReadWrite User.Read",
-                    },
-                    headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Cache-Control": "no-store",
-                        "Pragma": "no-cache",
-                    }
-                )
-
-            except Exception as e:
-                logger.error(f"❌ Azure token exchange failed: {str(e)}")
-                return JSONResponse(
-                    {"error": "invalid_grant", "error_description": f"Azure authentication failed: {str(e)}"},
+                    {"error": "invalid_grant"},
                     status_code=400
                 )
+
+            # Get Azure auth code
+            auth_code_result = dcr_service.db_service.fetch_one(
+                f"SELECT metadata FROM {dcr_service._get_table_name('dcr_tokens')} "
+                f"WHERE dcr_token_type = 'authorization_code' AND dcr_token_value = ?",
+                (code,)
+            )
+
+            if auth_code_result and auth_code_result[0]:
+                metadata = json.loads(auth_code_result[0])
+                azure_tokens = metadata.get("azure_tokens")
+            else:
+                azure_tokens = None
+
+            if not azure_tokens or not azure_tokens.get("access_token"):
+                return JSONResponse(
+                    {"error": "invalid_grant", "error_description": "Azure tokens not found in metadata"},
+                    status_code=400
+                )
+
+            # Use tokens from metadata (already exchanged in azure_callback)
+            from datetime import datetime, timedelta, timezone
+            token_info = {
+                "access_token": azure_tokens["access_token"],
+                "refresh_token": azure_tokens.get("refresh_token"),
+                "scope": azure_tokens.get("scope"),
+                "expiry": (datetime.now(timezone.utc) + timedelta(seconds=azure_tokens.get("expires_in", 3600))).isoformat()
+            }
+            logger.info(f"✅ Using Azure tokens from metadata (already exchanged in azure_callback)")
+
+            # Generate our own tokens
+            access_token = secrets.token_urlsafe(32)
+            new_refresh_token = secrets.token_urlsafe(32)
+
+            # Get user info from metadata
+            user_info_metadata = azure_tokens.get("azure_user_info") if "azure_user_info" in azure_tokens else metadata.get("azure_user_info", {})
+            azure_object_id = user_info_metadata.get("object_id")
+            user_email = user_info_metadata.get("email")
+            user_name = user_info_metadata.get("display_name")
+
+            if not azure_object_id:
+                return JSONResponse(
+                    {"error": "invalid_grant", "error_description": "User not authenticated - azure_object_id not found in metadata"},
+                    status_code=400
+                )
+
+            # Store token mapping
+            azure_expiry = datetime.fromisoformat(token_info["expiry"])
+
+            # Store tokens
+            dcr_service.store_tokens(
+                dcr_client_id=client_id,
+                dcr_access_token=access_token,
+                dcr_refresh_token=new_refresh_token,
+                expires_in=dcr_service.dcr_bearer_ttl_seconds,
+                scope=code_data["scope"],
+                azure_object_id=azure_object_id,
+                azure_access_token=token_info["access_token"],
+                azure_refresh_token=token_info.get("refresh_token"),
+                azure_expires_at=azure_expiry,
+                user_email=user_email,
+                user_name=user_name,
+            )
+
+            logger.info(f"✅ Token issued for DCR client: {client_id}")
+
+            return JSONResponse(
+                {
+                    "access_token": access_token,
+                    "token_type": "Bearer",
+                    "expires_in": dcr_service.dcr_bearer_ttl_seconds,
+                    "refresh_token": new_refresh_token,
+                    "scope": code_data["scope"],
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": "no-store",
+                    "Pragma": "no-cache",
+                }
+            )
 
         # Refresh token grant
         elif grant_type == "refresh_token":
@@ -551,37 +520,45 @@ def add_dcr_endpoints(app):
             # Verify DCR refresh token
             refresh_data = dcr_service.verify_refresh_token(refresh_token, client_id)
             if not refresh_data:
-                # DCR refresh token expired or invalid
-                # Client must re-authenticate with Azure
                 return JSONResponse(
-                    {"error": "invalid_grant", "error_description": "DCR refresh token expired. Re-authentication required."},
+                    {"error": "invalid_grant", "error_description": "Invalid or expired refresh token"},
                     status_code=400
                 )
 
             azure_object_id = refresh_data["azure_object_id"]
             scope = refresh_data["scope"]
 
-            # Get Azure tokens (just for validation, not for refresh)
+            # Get Azure tokens
             azure_tokens = dcr_service.get_azure_tokens_by_object_id(azure_object_id)
-            if not azure_tokens:
+            if not azure_tokens or not azure_tokens.get("refresh_token"):
                 return JSONResponse(
-                    {"error": "invalid_grant", "error_description": "Azure tokens not found"},
+                    {"error": "invalid_grant", "error_description": "Azure refresh token not found"},
                     status_code=400
                 )
 
-            # DCR Bearer token refresh: Generate new DCR tokens WITHOUT touching Azure
-            # This is purely a DCR-level operation
-            logger.info(f"♻️ Refreshing DCR Bearer token for client: {client_id} (Azure tokens unchanged)")
+            # Refresh Azure tokens
+            oauth_client = get_oauth_client()
+            scope_list = scope.split() if scope else None
 
+            new_azure_tokens = await oauth_client.refresh_access_token(
+                refresh_token=azure_tokens["refresh_token"],
+                client_id=dcr_service.azure_application_id,
+                client_secret=dcr_service.azure_client_secret,
+                tenant_id=dcr_service.azure_tenant_id,
+                scopes=scope_list,
+            )
+
+            # Generate new DCR tokens
             new_access_token = secrets.token_urlsafe(32)
             new_refresh_token = secrets.token_urlsafe(32)
 
-            # Parse existing Azure expiry
-            azure_expiry = azure_tokens.get("expires_at")
-            if isinstance(azure_expiry, str):
-                azure_expiry = datetime.fromisoformat(azure_expiry)
+            # Parse Azure token expiry
+            if isinstance(new_azure_tokens["expiry"], str):
+                azure_expiry = datetime.fromisoformat(new_azure_tokens["expiry"])
+            else:
+                azure_expiry = new_azure_tokens["expiry"]
 
-            # Store new DCR tokens with EXISTING Azure tokens
+            # Store new tokens
             dcr_service.store_tokens(
                 dcr_client_id=client_id,
                 dcr_access_token=new_access_token,
@@ -589,14 +566,14 @@ def add_dcr_endpoints(app):
                 expires_in=dcr_service.dcr_bearer_ttl_seconds,
                 scope=scope,
                 azure_object_id=azure_object_id,
-                azure_access_token=azure_tokens["access_token"],
-                azure_refresh_token=azure_tokens["refresh_token"],
+                azure_access_token=new_azure_tokens["access_token"],
+                azure_refresh_token=new_azure_tokens.get("refresh_token", azure_tokens["refresh_token"]),
                 azure_expires_at=azure_expiry,
                 user_email=azure_tokens.get("user_email"),
                 user_name=refresh_data.get("user_name"),
             )
 
-            logger.info(f"✅ DCR Bearer token refreshed for client: {client_id}")
+            logger.info(f"✅ Token refreshed for DCR client: {client_id}")
 
             return JSONResponse(
                 {
@@ -633,21 +610,8 @@ def add_dcr_endpoints(app):
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["Mail.Read", "Mail.ReadWrite", "User.Read"],
+            "scopes_supported": ["Notes.Read", "Notes.ReadWrite", "User.Read"],
             "code_challenge_methods_supported": ["S256"],
-        })
-
-    @app.get("/.well-known/oauth-protected-resource", tags=["OAuth/DCR"])
-    async def oauth_protected_resource(request: Request):
-        """RFC 8707 OAuth 2.0 Protected Resource Metadata"""
-        base_url = f"{request.url.scheme}://{request.url.netloc}"
-
-        return JSONResponse({
-            "resource": base_url,
-            "authorization_servers": [base_url],
-            "bearer_methods_supported": ["header"],
-            "resource_documentation": f"{base_url}/docs",
-            "scopes_supported": ["Mail.Read", "Mail.ReadWrite", "User.Read"],
         })
 
     logger.info("✅ DCR OAuth endpoints added to FastAPI app")

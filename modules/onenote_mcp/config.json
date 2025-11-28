@@ -1,0 +1,32 @@
+{
+  "mcp": {
+    "server_name": "onenote-mcp-server",
+    "command": "python",
+    "args": ["-m", "modules.onenote_mcp.entrypoints.run_fastapi"],
+    "env": {
+      "PYTHONPATH": "${PROJECT_ROOT}"
+    }
+  },
+  "server": {
+    "default_host": "0.0.0.0",
+    "default_port": 8003
+  },
+  "onenote": {
+    "default_max_notebooks": 50,
+    "default_max_sections": 100,
+    "default_max_pages": 100,
+    "max_page_content_length": 100000
+  },
+  "database": {
+    "comment": "DATABASE_ONENOTE_PATH 환경 변수 우선 사용. 미설정 시 아래 기본값 사용",
+    "default_path": "./data/onenote.db",
+    "use_absolute_paths": true,
+    "create_if_not_exists": true
+  },
+  "dcr_oauth": {
+    "comment": "DCR OAuth 모듈 의존성 설정",
+    "module_name": "onenote",
+    "database_name_pattern": "auth_{module_name}.db",
+    "description": "onenote 모듈이 DCR 인증을 사용함을 명시. DCR은 auth_onenote.db를 사용"
+  }
+}

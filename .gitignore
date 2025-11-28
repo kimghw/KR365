@@ -216,3 +216,6 @@ modules/templates/data/query_templates_split/backup*/
 # MCP server output files
 *.out
 .env_render
+
+# Archive directory
+/archive/

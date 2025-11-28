@@ -53,7 +53,7 @@ if env_file.exists():
 else:
     print(f"⚠️ .env file not found at {env_file}")
 
-from modules.mail_query_MCP.mcp_server.http_server import HTTPStreamingMailAttachmentServer
+from modules.outlook_mcp.mcp_server.http_server import HTTPStreamingMailAttachmentServer
 from modules.enrollment.mcp_server.http_server import HTTPStreamingAuthServer
 from modules.onenote_mcp.mcp_server.http_server import HTTPStreamingOneNoteServer
 from modules.onedrive_mcp.mcp_server.http_server import HTTPStreamingOneDriveServer
@@ -1062,7 +1062,7 @@ class UnifiedMCPServer:
                     logger.info(f"♻️ Skipping Azure token lookup (reusing existing session)")
                     azure_tokens = {
                         "access_token": "reused_session",  # Placeholder
-                        "expires_in": 3600,
+                        "expires_in": dcr_service.dcr_bearer_ttl_seconds,
                         "user_email": "existing_session",
                         "scope": auth_data.get("scope", "Mail.Read User.Read"),
                         "azure_expires_at": None,

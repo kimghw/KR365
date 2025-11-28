@@ -96,7 +96,7 @@ class DashboardService:
                     return {"success": False, "error": "Server is already running", "pid": pid}
 
             # Start server
-            server_script = PROJECT_ROOT / "modules" / "mail_query_MCP" / "entrypoints" / "run_fastapi.py"
+            server_script = PROJECT_ROOT / "modules" / "outlook_mcp" / "entrypoints" / "run_fastapi.py"
             log_file = LOG_DIR / "mail_query_fastapi.log"
 
             # Load environment variables from .env file
@@ -110,8 +110,11 @@ class DashboardService:
                             env[key.strip()] = value.strip()
                 logger.info(f"✅ Loaded environment variables from {ENV_FILE} for server process")
 
+            # Use MAIL_API_PORT from environment or default to 8001
+            server_port = os.getenv("MAIL_API_PORT", "8001")
+
             process = subprocess.Popen(
-                ["python3", str(server_script), "--host", "0.0.0.0", "--port", "8000"],
+                ["python3", str(server_script), "--host", "0.0.0.0", "--port", server_port],
                 stdout=open(log_file, 'a'),
                 stderr=subprocess.STDOUT,
                 cwd=PROJECT_ROOT,
@@ -488,7 +491,9 @@ class DashboardService:
     @staticmethod
     def get_endpoints_info(tunnel_url: Optional[str] = None) -> Dict:
         """Get information about all endpoints"""
-        base_url = tunnel_url or "http://localhost:8000"
+        # Use MAIL_API_PORT from environment or default to 8001
+        default_port = os.getenv("MAIL_API_PORT", "8001")
+        base_url = tunnel_url or f"http://localhost:{default_port}"
 
         return {
             "base_url": base_url,
@@ -976,20 +981,19 @@ def create_dashboard_routes() -> List[Route]:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard Login</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        .material-icons {
+            vertical-align: middle;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
-            align-items: center;
             justify-content: center;
-            padding: 20px;
+            align-items: center;
+            margin: 0;
         }
         .login-container {
             background: white;
@@ -1068,7 +1072,7 @@ def create_dashboard_routes() -> List[Route]:
 <body>
     <div class="login-container">
         <div class="login-header">
-            <h1>🔐 Dashboard Login</h1>
+            <h1><span class="material-icons">lock</span> Dashboard Login</h1>
             <p>MailQueryWithMCP Management</p>
         </div>
         <div id="error-message" class="error-message"></div>
@@ -1185,11 +1189,16 @@ def create_dashboard_routes() -> List[Route]:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MailQueryWithMCP - Management Dashboard</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+        }
+        .material-icons {
+            vertical-align: middle;
+            font-size: 20px;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -1431,20 +1440,20 @@ def create_dashboard_routes() -> List[Route]:
 <body>
     <div class="container">
         <div class="header" style="position: relative;">
-            <h1>🚀 MailQueryWithMCP Management Dashboard</h1>
+            <h1><span class="material-icons" style="font-size: 32px; vertical-align: bottom;">rocket_launch</span> MailQueryWithMCP Management Dashboard</h1>
             <p>Unified server management, logs, and configuration</p>
             <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 10px;">
                 <a href="https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"
                    target="_blank"
                    class="btn btn-primary"
                    style="display: inline-flex; align-items: center; gap: 8px;">
-                    <span>🔐</span>
+                    <span class="material-icons">lock</span>
                     <span>Azure AD App</span>
                 </a>
                 <a href="/dashboard/logout"
                    class="btn btn-danger"
                    style="display: inline-flex; align-items: center; gap: 8px;">
-                    <span>🚪</span>
+                    <span class="material-icons">logout</span>
                     <span>Logout</span>
                 </a>
             </div>
@@ -1453,24 +1462,24 @@ def create_dashboard_routes() -> List[Route]:
         <div class="grid">
             <!-- Server Status -->
             <div class="card">
-                <h2>📧 Mail Query MCP Server</h2>
+                <h2><span class="material-icons">email</span> Mail Query MCP Server</h2>
                 <div id="server-status">Loading...</div>
                 <div style="margin-top: 15px; display: flex; gap: 10px;">
-                    <button class="btn btn-primary" onclick="startServer()" style="flex: 1;">▶️ Start Server</button>
-                    <button class="btn btn-danger" onclick="stopServer()" style="flex: 1;">⏹️ Stop Server</button>
+                    <button class="btn btn-primary" onclick="startServer()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start Server</button>
+                    <button class="btn btn-danger" onclick="stopServer()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop Server</button>
                 </div>
             </div>
 
             <!-- Tunnel Status -->
             <div class="card">
-                <h2>🌐 Cloudflare Tunnel</h2>
+                <h2><span class="material-icons">public</span> Cloudflare Tunnel</h2>
                 <div id="tunnel-status">Loading...</div>
                 <div style="margin-top: 15px;">
                     <label for="tunnel-port" style="display: block; margin-bottom: 5px;">Tunnel Port:</label>
                     <input type="number" id="tunnel-port" value="8001" min="1" max="65535" style="width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px;">
                     <div style="display: flex; gap: 10px;">
-                        <button class="btn btn-primary" onclick="startTunnelWithPort()" style="flex: 1;">▶️ Start Tunnel</button>
-                        <button class="btn btn-danger" onclick="stopTunnel()" style="flex: 1;">⏹️ Stop Tunnel</button>
+                        <button class="btn btn-primary" onclick="startTunnelWithPort()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start Tunnel</button>
+                        <button class="btn btn-danger" onclick="stopTunnel()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop Tunnel</button>
                     </div>
                 </div>
             </div>
@@ -1479,15 +1488,15 @@ def create_dashboard_routes() -> List[Route]:
         <!-- Tabs Navigation -->
         <div class="card full-width">
             <div class="tabs">
-                <button class="tab active" onclick="switchTab('logs')">📋 Logs</button>
-                <button class="tab" onclick="switchTab('endpoints')">🔗 Endpoints</button>
-                <button class="tab" onclick="switchTab('database')">💾 Database</button>
-                <button class="tab" onclick="switchTab('env')">⚙️ Environment</button>
+                <button class="tab active" onclick="switchTab('logs')"><span class="material-icons">description</span> Logs</button>
+                <button class="tab" onclick="switchTab('endpoints')"><span class="material-icons">link</span> Endpoints</button>
+                <button class="tab" onclick="switchTab('database')"><span class="material-icons">storage</span> Database</button>
+                <button class="tab" onclick="switchTab('env')"><span class="material-icons">settings</span> Environment</button>
             </div>
 
             <!-- Logs Tab -->
             <div id="logs-tab" class="tab-content active">
-                <h2 style="margin-bottom: 15px;">📋 Log Viewer</h2>
+                <h2 style="margin-bottom: 15px;"><span class="material-icons">description</span> Log Viewer</h2>
                 <div class="log-selector">
                     <select id="log-select" onchange="loadLog()">
                         <option value="">Select a log file...</option>
@@ -1495,25 +1504,25 @@ def create_dashboard_routes() -> List[Route]:
                 </div>
                 <div class="log-viewer" id="log-content">Select a log file to view its contents</div>
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button class="btn btn-primary" onclick="loadLog()">🔄 Refresh Log</button>
-                    <button class="btn btn-danger" onclick="clearCurrentLog()">🗑️ Clear Current Log</button>
-                    <button class="btn btn-danger" onclick="clearAllLogs()">⚠️ Clear All Logs</button>
+                    <button class="btn btn-primary" onclick="loadLog()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">refresh</span> Refresh Log</button>
+                    <button class="btn btn-danger" onclick="clearCurrentLog()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">delete</span> Clear Current Log</button>
+                    <button class="btn btn-danger" onclick="clearAllLogs()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">warning</span> Clear All Logs</button>
                 </div>
             </div>
 
             <!-- Endpoints Tab -->
             <div id="endpoints-tab" class="tab-content">
-                <h2 style="margin-bottom: 15px;">🔗 Service Endpoints</h2>
+                <h2 style="margin-bottom: 15px;"><span class="material-icons">link</span> Service Endpoints</h2>
                 <div id="endpoints-info">Loading...</div>
             </div>
 
             <!-- Database Tab -->
             <div id="database-tab" class="tab-content">
-                <h2 style="margin-bottom: 15px;">💾 Database Viewer</h2>
+                <h2 style="margin-bottom: 15px;"><span class="material-icons">storage</span> Database Viewer</h2>
 
                 <!-- DCR Configuration Section -->
                 <div id="dcr-config-section" style="display: none; padding: 15px; background: #f0f9ff; border-radius: 8px; margin-bottom: 20px;">
-                    <h3 style="margin-bottom: 15px; color: #667eea;">🔐 DCR OAuth Configuration</h3>
+                    <h3 style="margin-bottom: 15px; color: #667eea; display: flex; align-items: center; gap: 8px;"><span class="material-icons">lock</span> DCR OAuth Configuration</h3>
                     <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-bottom: 15px;">
                         <div>
                             <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #666;">Application ID:</label>
@@ -1528,14 +1537,14 @@ def create_dashboard_routes() -> List[Route]:
                         <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #666;">Redirect URI (DB):</label>
                         <div style="display: flex; gap: 10px;">
                             <input type="text" id="dcr-redirect-uri" class="env-input" style="flex: 1; font-family: monospace; font-size: 12px;" placeholder="https://example.trycloudflare.com/oauth/azure_callback">
-                            <button class="btn btn-primary" onclick="updateDcrRedirectUri()">💾 Save</button>
+                            <button class="btn btn-primary" onclick="updateDcrRedirectUri()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">save</span> Save</button>
                         </div>
                         <div id="dcr-env-uri" style="margin-top: 5px; padding: 5px; font-size: 11px; color: #666;">
                             <strong>ENV:</strong> <span id="dcr-env-value">Loading...</span>
                         </div>
                     </div>
                     <div style="padding: 10px; background: #fff3cd; border-radius: 5px; border: 1px solid #ffc107;">
-                        <strong>⚠️ Important:</strong> The redirect URI must match exactly with Azure AD App Registration.
+                        <strong><span class="material-icons" style="font-size: 16px; vertical-align: text-bottom;">warning</span> Important:</strong> The redirect URI must match exactly with Azure AD App Registration.
                         <br>After changing, update Azure Portal and restart the server.
                     </div>
                 </div>
@@ -1560,8 +1569,8 @@ def create_dashboard_routes() -> List[Route]:
                 </div>
 
                 <div style="margin-bottom: 15px; display: flex; gap: 10px;">
-                    <button class="btn btn-danger" onclick="clearDatabase()">🗑️ Clear Database (Delete Data)</button>
-                    <button class="btn btn-danger" onclick="resetDatabase()">⚠️ Reset Database (Drop Tables)</button>
+                    <button class="btn btn-danger" onclick="clearDatabase()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">delete</span> Clear Database (Delete Data)</button>
+                    <button class="btn btn-danger" onclick="resetDatabase()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">warning</span> Reset Database (Drop Tables)</button>
                 </div>
 
                 <div id="query-results">
@@ -1574,19 +1583,19 @@ def create_dashboard_routes() -> List[Route]:
 
             <!-- Environment Tab -->
             <div id="env-tab" class="tab-content">
-                <h2 style="margin-bottom: 15px;">⚙️ Environment Variables</h2>
+                <h2 style="margin-bottom: 15px;"><span class="material-icons">settings</span> Environment Variables</h2>
                 <div class="env-editor">
                     <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
                         <select id="env-select" class="env-input" style="flex: 1;" onchange="onEnvSelect()">
                             <option value="">Select a variable to edit or enter new...</option>
                         </select>
-                        <button class="btn btn-primary" onclick="loadEnvVariables()">🔄 Refresh</button>
+                        <button class="btn btn-primary" onclick="loadEnvVariables()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">refresh</span> Refresh</button>
                     </div>
                     <input type="text" id="new-env-key" class="env-input" placeholder="Variable name (e.g., REDIRECT_URI)">
                     <input type="text" id="new-env-value" class="env-input" placeholder="Value">
                     <div style="display: flex; gap: 10px; margin-top: 10px;">
-                        <button class="btn btn-primary" onclick="addEnvVariable()">💾 Add/Update Variable</button>
-                        <button class="btn btn-danger" onclick="clearEnvForm()">❌ Clear Form</button>
+                        <button class="btn btn-primary" onclick="addEnvVariable()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">save</span> Add/Update Variable</button>
+                        <button class="btn btn-danger" onclick="clearEnvForm()" style="display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">clear</span> Clear Form</button>
                     </div>
                 </div>
                 <div id="env-variables" style="margin-top: 20px;">Loading...</div>
@@ -1611,7 +1620,11 @@ def create_dashboard_routes() -> List[Route]:
             document.getElementById(tabName + '-tab').classList.add('active');
 
             // Add active class to clicked tab
-            event.target.classList.add('active');
+            // Note: event.target might be the span inside the button, so we need to find the closest button
+            const tabButton = event.target.closest('.tab');
+            if (tabButton) {
+                tabButton.classList.add('active');
+            }
         }
 
         // Copy to clipboard helper
@@ -1697,7 +1710,7 @@ def create_dashboard_routes() -> List[Route]:
                 // Redirect URIs for Azure AD App Registration - FIRST
                 if (data.redirect_uris) {
                     html += '<div style="padding: 15px; background: #fff3cd; border-radius: 8px; border: 1px solid #ffc107;">';
-                    html += '<h3 style="margin-bottom: 10px; color: #856404;">🔐 OAuth Redirect URIs (Azure AD App Registration)</h3>';
+                    html += '<h3 style="margin-bottom: 10px; color: #856404; display: flex; align-items: center; gap: 8px;"><span class="material-icons">lock</span> OAuth Redirect URIs (Azure AD App Registration)</h3>';
                     html += '<p style="font-size: 11px; color: #856404; margin-bottom: 15px;">Click to copy these URIs for Azure AD App Registration</p>';
                     html += '<div style="font-size: 12px;">';
                     for (const [key, value] of Object.entries(data.redirect_uris)) {
@@ -1710,7 +1723,7 @@ def create_dashboard_routes() -> List[Route]:
                                 <div style="font-family: monospace; color: #007bff; word-break: break-all;">
                                     ${value}
                                 </div>
-                                <div style="font-size: 10px; color: #6c757d; margin-top: 5px;">📋 Click to copy</div>
+                                <div style="font-size: 10px; color: #6c757d; margin-top: 5px; display: flex; align-items: center; gap: 4px;"><span class="material-icons" style="font-size: 12px;">content_copy</span> Click to copy</div>
                             </div>
                         `;
                     }
@@ -1779,8 +1792,8 @@ def create_dashboard_routes() -> List[Route]:
                         <div class="env-item">
                             <span class="env-key">${key}</span>
                             <span class="env-value">${value}</span>
-                            <button class="btn btn-primary" style="margin-left: auto; padding: 5px 10px; font-size: 12px;"
-                                    onclick="editEnvVariable('${key}', '${value.replace(/'/g, "\\'")}')">✏️ Edit</button>
+                            <button class="btn btn-primary" style="margin-left: auto; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 4px;"
+                                    onclick="editEnvVariable('${key}', '${value.replace(/'/g, "\\'")}')"><span class="material-icons" style="font-size: 14px;">edit</span> Edit</button>
                         </div>
                     `;
                 }
@@ -2555,7 +2568,7 @@ def create_dashboard_routes() -> List[Route]:
     async def api_get_dcr_logs(request):
         """Get DCR database operation logs"""
         try:
-            from modules.dcr_oauth.dcr_db_logger import get_dcr_db_logger
+            from modules.dcr_oauth_module.dcr_db_logger import get_dcr_db_logger
 
             dcr_logger = get_dcr_db_logger()
 
@@ -2579,7 +2592,7 @@ def create_dashboard_routes() -> List[Route]:
     async def api_get_dcr_log_stats(request):
         """Get DCR database operation statistics"""
         try:
-            from modules.dcr_oauth.dcr_db_logger import get_dcr_db_logger
+            from modules.dcr_oauth_module.dcr_db_logger import get_dcr_db_logger
 
             dcr_logger = get_dcr_db_logger()
             stats = dcr_logger.get_statistics()

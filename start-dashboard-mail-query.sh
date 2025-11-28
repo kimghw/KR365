@@ -1,20 +1,44 @@
 #!/bin/bash
-# Mail Query MCP Dashboard & Server Launcher
+# MCP Dashboard & Server Launcher (Multi-Server Support)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Configuration for both servers
-DASHBOARD_PID_FILE="/tmp/dashboard_server.pid"
-FASTAPI_PID_FILE="/tmp/mail_query_fastapi.pid"
-DASHBOARD_LOG_FILE="logs/dashboard.log"
-FASTAPI_LOG_FILE="logs/mail_query_fastapi.log"
-DASHBOARD_PORT=${DASHBOARD_PORT:-9000}
-FASTAPI_PORT=${MAIL_API_PORT:-8001}
+# Server Selection (mail_query or onenote)
+# Can be set via environment variable: SERVER_TYPE=onenote ./start-dashboard-mail-query.sh
+SERVER_TYPE="${SERVER_TYPE:-mail_query}"
 
-# Database configuration
-export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_mail_query.db"
-export DATABASE_MAIL_QUERY_PATH="${SCRIPT_DIR}/data/mail_query.db"
+# Configuration based on server type
+case "$SERVER_TYPE" in
+    mail_query)
+        FASTAPI_PID_FILE="/tmp/mail_query_fastapi.pid"
+        FASTAPI_LOG_FILE="logs/mail_query_fastapi.log"
+        FASTAPI_PORT=${MAIL_API_PORT:-8001}
+        FASTAPI_SCRIPT="modules/outlook_mcp/entrypoints/run_fastapi.py"
+        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_mail_query.db"
+        export DATABASE_MAIL_QUERY_PATH="${SCRIPT_DIR}/data/mail_query.db"
+        SERVER_DISPLAY_NAME="Mail Query"
+        ;;
+    onenote)
+        FASTAPI_PID_FILE="/tmp/onenote_fastapi.pid"
+        FASTAPI_LOG_FILE="logs/onenote_fastapi.log"
+        FASTAPI_PORT=${ONENOTE_SERVER_PORT:-8003}
+        FASTAPI_SCRIPT="modules/onenote_mcp/entrypoints/run_fastapi.py"
+        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_onenote.db"
+        export DATABASE_ONENOTE_PATH="${SCRIPT_DIR}/data/onenote.db"
+        SERVER_DISPLAY_NAME="OneNote"
+        ;;
+    *)
+        echo "❌ Unknown server type: $SERVER_TYPE"
+        echo "Valid values: mail_query, onenote"
+        exit 1
+        ;;
+esac
+
+# Common configuration
+DASHBOARD_PID_FILE="/tmp/dashboard_server.pid"
+DASHBOARD_LOG_FILE="logs/dashboard.log"
+DASHBOARD_PORT=${DASHBOARD_PORT:-9000}
 
 # Create logs directory if it doesn't exist
 mkdir -p logs
@@ -53,7 +77,7 @@ start_fastapi() {
         sleep 2
     fi
 
-    echo "🚀 Starting FastAPI Mail Query Server on port $FASTAPI_PORT..."
+    echo "🚀 Starting FastAPI $SERVER_DISPLAY_NAME Server on port $FASTAPI_PORT..."
 
     # Kill any existing processes on the port
     lsof -i :$FASTAPI_PORT | grep LISTEN | awk '{print $2}' | xargs -r kill -9 2>/dev/null
@@ -62,9 +86,8 @@ start_fastapi() {
     pkill -f "run_fastapi.py" 2>/dev/null
     sleep 1
 
-    export DCR_DATABASE_PATH="$DCR_DATABASE_PATH"
-    export DATABASE_MAIL_QUERY_PATH="$DATABASE_MAIL_QUERY_PATH"
-    nohup python3 modules/mail_query_MCP/entrypoints/run_fastapi.py --port "$FASTAPI_PORT" > "$FASTAPI_LOG_FILE" 2>&1 &
+    # Export database paths (already set above based on SERVER_TYPE)
+    nohup python3 "$FASTAPI_SCRIPT" --port "$FASTAPI_PORT" > "$FASTAPI_LOG_FILE" 2>&1 &
     PID=$!
     echo $PID > "$FASTAPI_PID_FILE"
 
@@ -113,7 +136,7 @@ start_dashboard() {
 # Function to start both servers
 start_all() {
     echo "════════════════════════════════════════════════════"
-    echo "🚀 Starting Mail Query MCP System"
+    echo "🚀 Starting $SERVER_DISPLAY_NAME MCP System"
     echo "════════════════════════════════════════════════════"
     echo ""
 
@@ -135,18 +158,19 @@ start_all() {
         echo ""
         echo "📌 Service URLs:"
         echo "│"
-        echo "├─ 📧 Mail Query MCP API:"
+        echo "├─ 📧 $SERVER_DISPLAY_NAME MCP API:"
         echo "│   └─ http://localhost:$FASTAPI_PORT/"
         echo "│"
         echo "├─ 📚 API Documentation:"
         echo "│   └─ http://localhost:$FASTAPI_PORT/docs"
         echo "│"
         echo "├─ 🎯 OAuth Authorization:"
-        echo "│   └─ http://localhost:$FASTAPI_PORT/auth/login"
+        echo "│   └─ http://localhost:$FASTAPI_PORT/oauth/authorize"
         echo "│"
         echo "└─ 📊 Web Dashboard:"
         echo "    └─ http://localhost:$DASHBOARD_PORT/dashboard"
         echo ""
+        echo "💡 Server Type: $SERVER_TYPE"
         echo "💡 Logs:"
         echo "   FastAPI: tail -f $FASTAPI_LOG_FILE"
         echo "   Dashboard: tail -f $DASHBOARD_LOG_FILE"
@@ -202,7 +226,7 @@ stop_dashboard() {
 # Function to stop all servers
 stop_all() {
     echo "════════════════════════════════════════════════════"
-    echo "⏹️  Stopping Mail Query MCP System"
+    echo "⏹️  Stopping $SERVER_DISPLAY_NAME MCP System"
     echo "════════════════════════════════════════════════════"
     echo ""
 
@@ -217,12 +241,14 @@ stop_all() {
 # Function to show status
 show_status() {
     echo "════════════════════════════════════════════════════"
-    echo "📊 Mail Query MCP System Status"
+    echo "📊 $SERVER_DISPLAY_NAME MCP System Status"
     echo "════════════════════════════════════════════════════"
+    echo ""
+    echo "📍 Server Type: $SERVER_TYPE"
     echo ""
 
     # Check FastAPI status
-    echo "🔹 FastAPI Server:"
+    echo "🔹 FastAPI $SERVER_DISPLAY_NAME Server:"
     if is_fastapi_running; then
         if [ -f "$FASTAPI_PID_FILE" ]; then
             PID=$(cat "$FASTAPI_PID_FILE")
@@ -255,8 +281,11 @@ show_status() {
 }
 
 # Main script
-case "${1:-start}" in
+case "${1:-start-dashboard}" in
     start)
+        start_all
+        ;;
+    start-all)
         start_all
         ;;
     start-fastapi)
@@ -305,10 +334,11 @@ case "${1:-start}" in
         wait
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|logs|start-fastapi|start-dashboard|stop-fastapi|stop-dashboard}"
+        echo "Usage: $0 {start|start-all|stop|restart|status|logs|start-fastapi|start-dashboard|stop-fastapi|stop-dashboard}"
         echo ""
         echo "Commands:"
-        echo "  start              - Start both FastAPI and Dashboard servers"
+        echo "  start              - Start only Dashboard server (default)"
+        echo "  start-all          - Start both FastAPI and Dashboard servers"
         echo "  start-fastapi      - Start only FastAPI server"
         echo "  start-dashboard    - Start only Dashboard server"
         echo "  stop               - Stop all servers"
@@ -321,10 +351,25 @@ case "${1:-start}" in
         echo "  logs               - Show live logs from both servers"
         echo ""
         echo "Environment variables:"
-        echo "  DASHBOARD_PORT     - Port for dashboard (default: 9000)"
-        echo "  MAIL_API_PORT      - Port for FastAPI (default: 8001)"
+        echo "  SERVER_TYPE           - Server to run: mail_query|onenote (default: mail_query)"
+        echo "  DASHBOARD_PORT        - Port for dashboard (default: 9000)"
+        echo "  MAIL_API_PORT         - Port for Mail Query FastAPI (default: 8001)"
+        echo "  ONENOTE_SERVER_PORT   - Port for OneNote FastAPI (default: 8003)"
         echo ""
-        echo "Default action: start"
+        echo "Examples:"
+        echo "  # Start Dashboard only (default)"
+        echo "  ./start-dashboard-mail-query.sh"
+        echo ""
+        echo "  # Start both Dashboard and FastAPI server"
+        echo "  ./start-dashboard-mail-query.sh start-all"
+        echo ""
+        echo "  # Start OneNote server with dashboard"
+        echo "  SERVER_TYPE=onenote ./start-dashboard-mail-query.sh start-all"
+        echo ""
+        echo "  # Start OneNote on custom port"
+        echo "  SERVER_TYPE=onenote ONENOTE_SERVER_PORT=8005 ./start-dashboard-mail-query.sh start-all"
+        echo ""
+        echo "Default action: start-dashboard (dashboard only)"
         exit 1
         ;;
 esac

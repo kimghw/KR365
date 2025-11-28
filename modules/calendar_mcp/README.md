@@ -4,7 +4,7 @@ Microsoft Outlook Calendar API를 사용한 일정 관리 MCP 모듈입니다.
 
 ## 개요
 
-이 모듈은 Microsoft Graph API를 통해 Outlook Calendar와 연동하여 일정을 관리할 수 있는 MCP (Model Context Protocol) 핸들러를 제공합니다. mail_query_MCP 모듈에서 상속하여 사용할 수 있도록 설계되었습니다.
+이 모듈은 Microsoft Graph API를 통해 Outlook Calendar와 연동하여 일정을 관리할 수 있는 MCP (Model Context Protocol) 핸들러를 제공합니다. outlook_mcp 모듈에서 상속하여 사용할 수 있도록 설계되었습니다.
 
 ## 기능
 
@@ -70,7 +70,7 @@ result = await handlers.handle_calendar_call_tool(
 )
 ```
 
-### 2. 상속하여 사용 (mail_query_MCP)
+### 2. 상속하여 사용 (outlook_mcp)
 
 ```python
 from infra.handlers.attachment_filter_handlers import AttachmentFilterHandlers
@@ -245,9 +245,9 @@ modules/calendar_mcp/
 
 ## 통합 현황
 
-### mail_query_MCP
+### outlook_mcp
 
-`modules/mail_query_MCP/mcp_server/handlers.py`:
+`modules/outlook_mcp/mcp_server/handlers.py`:
 
 ```python
 class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
@@ -260,7 +260,7 @@ class MCPHandlers(AttachmentFilterHandlers, CalendarHandlers):
         # ...
 ```
 
-mail_query_MCP는 다음 도구들을 모두 제공합니다:
+outlook_mcp는 다음 도구들을 모두 제공합니다:
 - Mail Query 도구 (query_email, query_email_help, help)
 - Attachment 도구 (attachmentManager)
 - **Calendar 도구 (calendar_list_events, calendar_create_event, etc.)**

@@ -74,6 +74,9 @@ class FastAPIMailAttachmentServer:
         logger.info("🔍 Initializing database and checking authentication...")
 
         try:
+            # Initialize DCR client if not exists
+            self._ensure_dcr_client_registered()
+
             # Force database connection initialization
             query = "SELECT COUNT(*) FROM accounts WHERE is_active = 1"
             result = self.db.fetch_one(query)
@@ -120,6 +123,71 @@ class FastAPIMailAttachmentServer:
         except Exception as e:
             logger.error(f"❌ Failed to initialize database or check auth: {str(e)}")
             raise
+
+    def _ensure_dcr_client_registered(self):
+        """서버 시작 시 DCR Azure 앱 정보가 등록되어 있는지 확인하고, 환경변수에서 로드"""
+        import os
+        from modules.dcr_oauth_module.dcr_service import DCRService
+
+        try:
+            dcr_service = DCRService(module_name=self.server_name)
+
+            # 환경변수에서 Azure 설정 읽기
+            env_app_id = os.getenv("DCR_AZURE_CLIENT_ID")
+            env_secret = os.getenv("DCR_AZURE_CLIENT_SECRET")
+            env_tenant = os.getenv("DCR_AZURE_TENANT_ID", "common")
+            env_redirect = os.getenv("DCR_OAUTH_REDIRECT_URI")
+
+            if not env_app_id or not env_secret:
+                logger.warning("⚠️ DCR_AZURE_CLIENT_ID or DCR_AZURE_CLIENT_SECRET not set in environment")
+                logger.warning("⚠️ OAuth authentication will not be available")
+                return
+
+            # DB에 Azure 앱 정보가 있는지 확인
+            existing_app = dcr_service._fetch_one(
+                "SELECT application_id FROM dcr_azure_app LIMIT 1"
+            )
+
+            if not existing_app:
+                logger.info(f"🔧 No Azure app found in DB. Creating from environment variables...")
+
+                # Azure 앱 정보를 DB에 저장
+                encrypted_secret = dcr_service.crypto.account_encrypt_sensitive_data(env_secret)
+
+                dcr_service._execute(
+                    """
+                    INSERT INTO dcr_azure_app
+                    (application_id, client_secret, tenant_id, redirect_uri, created_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (env_app_id, encrypted_secret, env_tenant, env_redirect)
+                )
+
+                logger.info(f"✅ Created Azure app in DB: {env_app_id}")
+                logger.info(f"   Tenant: {env_tenant}")
+                logger.info(f"   Redirect URI: {env_redirect}")
+            else:
+                logger.info(f"✅ Azure app already registered in DB: {existing_app[0]}")
+
+                # 환경변수가 다르면 업데이트
+                if env_app_id != existing_app[0]:
+                    logger.info(f"🔄 Updating Azure app from environment variables...")
+                    encrypted_secret = dcr_service.crypto.account_encrypt_sensitive_data(env_secret)
+
+                    dcr_service._execute(
+                        """
+                        UPDATE dcr_azure_app
+                        SET application_id = ?, client_secret = ?, tenant_id = ?,
+                            redirect_uri = ?, updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (env_app_id, encrypted_secret, env_tenant, env_redirect)
+                    )
+
+                    logger.info(f"✅ Updated Azure app in DB: {env_app_id}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to ensure DCR Azure app registration: {e}")
+            # 서버 시작을 막지 않음
 
     async def _send_list_changed_notifications(self):
         """Send list changed notifications after initialization"""
@@ -516,6 +584,8 @@ All MCP requests should be sent to the root endpoint `/` as POST requests.
             description="""
 Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
 
+**Authentication Required:** Bearer token in Authorization header
+
 **Common Methods:**
 - `initialize` - Initialize MCP session
 - `tools/list` - List available tools
@@ -535,43 +605,33 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
             """,
             tags=["MCP Protocol"],
         )
-        async def mcp_endpoint(request: Request):
-            """MCP Protocol endpoint (auth handled by middleware)"""
-            # 인증은 auth_dependencies 미들웨어에서 처리
-            # POST /는 인증 제외됨 (로컬/내부망 사용)
-            user_id = getattr(request.state, 'user_id', None)
-            if user_id:
-                logger.info(f"🔐 Authenticated request from user: {user_id}")
-            # request.state에 사용자 정보 저장 (핸들러에서 사용)
-            request.state.user_id = user_id
+        async def mcp_endpoint(request: Request, user_data: dict = Depends(required_auth)):
+            """MCP Protocol endpoint - requires authentication"""
+            user_id = user_data.get('user_id')
+            logger.info(f"🔐 Authenticated MCP request from user: {user_id}")
+            # request.state는 이미 required_auth에서 설정됨
             return await self._handle_mcp_request(request)
 
         # Alias endpoints for MCP (with required auth)
         @app.post("/mcp", include_in_schema=False)
-        async def mcp_alias(request: Request):
-            """MCP endpoint alias (auth handled by middleware)"""
-            user_id = getattr(request.state, 'user_id', None)
-            if user_id:
-                logger.info(f"🔐 Authenticated request from user: {user_id}")
-            request.state.user_id = user_id
+        async def mcp_alias(request: Request, user_data: dict = Depends(required_auth)):
+            """MCP endpoint alias - requires authentication"""
+            user_id = user_data.get('user_id')
+            logger.info(f"🔐 Authenticated MCP request from user: {user_id}")
             return await self._handle_mcp_request(request)
 
         @app.post("/stream", include_in_schema=False)
-        async def stream_alias(request: Request):
-            """Stream endpoint alias (auth handled by middleware)"""
-            user_id = getattr(request.state, 'user_id', None)
-            if user_id:
-                logger.info(f"🔐 Authenticated request from user: {user_id}")
-            request.state.user_id = user_id
+        async def stream_alias(request: Request, user_data: dict = Depends(required_auth)):
+            """Stream endpoint alias - requires authentication"""
+            user_id = user_data.get('user_id')
+            logger.info(f"🔐 Authenticated MCP request from user: {user_id}")
             return await self._handle_mcp_request(request)
 
         @app.post("/steam", include_in_schema=False)
-        async def steam_alias(request: Request):
-            """Steam endpoint alias (auth handled by middleware)"""
-            user_id = getattr(request.state, 'user_id', None)
-            if user_id:
-                logger.info(f"🔐 Authenticated request from user: {user_id}")
-            request.state.user_id = user_id
+        async def steam_alias(request: Request, user_data: dict = Depends(required_auth)):
+            """Steam endpoint alias - requires authentication"""
+            user_id = user_data.get('user_id')
+            logger.info(f"🔐 Authenticated MCP request from user: {user_id}")
             return await self._handle_mcp_request(request)
 
         @app.get(
