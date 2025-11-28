@@ -4,17 +4,35 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Server Selection (OneNote only)
-SERVER_TYPE="onenote"
+# Server Selection (can be set via environment variable)
+SERVER_TYPE="${SERVER_TYPE:-onenote}"
 
-# OneNote Configuration
-FASTAPI_PID_FILE="/tmp/onenote_fastapi.pid"
-FASTAPI_LOG_FILE="logs/onenote_fastapi.log"
-FASTAPI_PORT=${ONENOTE_SERVER_PORT:-8002}
-FASTAPI_SCRIPT="modules/onenote_mcp/entrypoints/run_fastapi.py"
-export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_onenote.db"
-export DATABASE_ONENOTE_PATH="${SCRIPT_DIR}/data/onenote.db"
-SERVER_DISPLAY_NAME="OneNote"
+# Configuration based on server type
+case "$SERVER_TYPE" in
+    onenote)
+        FASTAPI_PID_FILE="/tmp/onenote_fastapi.pid"
+        FASTAPI_LOG_FILE="logs/onenote_fastapi.log"
+        FASTAPI_PORT=${ONENOTE_SERVER_PORT:-8002}
+        FASTAPI_SCRIPT="modules/onenote_mcp/entrypoints/run_fastapi.py"
+        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_onenote.db"
+        export DATABASE_ONENOTE_PATH="${SCRIPT_DIR}/data/onenote.db"
+        SERVER_DISPLAY_NAME="OneNote"
+        ;;
+    teams)
+        FASTAPI_PID_FILE="/tmp/teams_fastapi.pid"
+        FASTAPI_LOG_FILE="logs/teams_fastapi.log"
+        FASTAPI_PORT=${TEAMS_API_PORT:-8003}
+        FASTAPI_SCRIPT="modules/teams_mcp/entrypoints/run_fastapi.py"
+        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_teams.db"
+        export DATABASE_TEAMS_PATH="${SCRIPT_DIR}/data/teams.db"
+        SERVER_DISPLAY_NAME="Teams"
+        ;;
+    *)
+        echo "❌ Unknown server type: $SERVER_TYPE"
+        echo "Valid values: onenote, teams"
+        exit 1
+        ;;
+esac
 
 # Common configuration
 DASHBOARD_PID_FILE="/tmp/dashboard_server.pid"
@@ -457,27 +475,33 @@ case "${1:-start-dashboard}" in
         echo "  logs                  - Show live logs from all servers"
         echo ""
         echo "Environment variables:"
-        echo "  SERVER_TYPE           - Server to run: mail_query|onenote (default: mail_query)"
+        echo "  SERVER_TYPE           - Server to run: onenote|teams (default: onenote)"
         echo "  DASHBOARD_PORT        - Port for dashboard (default: 9000)"
-        echo "  MAIL_API_PORT         - Port for Mail Query FastAPI (default: 8001)"
-        echo "  ONENOTE_SERVER_PORT   - Port for OneNote FastAPI (default: 8003)"
+        echo "  ONENOTE_SERVER_PORT   - Port for OneNote FastAPI (default: 8002)"
+        echo "  TEAMS_API_PORT        - Port for Teams FastAPI (default: 8003)"
         echo ""
         echo "Examples:"
         echo "  # Start Dashboard only (default)"
         echo "  ./start-dashboard-onenote.sh"
         echo ""
-        echo "  # Start all services (FastAPI + Cloudflare + Dashboard)"
+        echo "  # Start all services for OneNote (FastAPI + Cloudflare + Dashboard)"
         echo "  ./start-dashboard-onenote.sh start-all"
         echo ""
+        echo "  # Start Teams server"
+        echo "  SERVER_TYPE=teams ./start-dashboard-onenote.sh start-all"
+        echo ""
         echo "  # Start OneNote server on custom port"
-        echo "  ONENOTE_SERVER_PORT=8003 ./start-dashboard-onenote.sh start-all"
+        echo "  ONENOTE_SERVER_PORT=8002 ./start-dashboard-onenote.sh start-all"
+        echo ""
+        echo "  # Start Teams server on custom port"
+        echo "  SERVER_TYPE=teams TEAMS_API_PORT=8003 ./start-dashboard-onenote.sh start-all"
         echo ""
         echo "  # Restart FastAPI server"
         echo "  ./start-dashboard-onenote.sh restart-fastapi"
         echo ""
         echo "Default action: start-dashboard (dashboard only)"
         echo ""
-        echo "💡 Default port: 8002 | Cloudflare tunnel will automatically proxy to the OneNote server"
+        echo "💡 Default: OneNote on port 8002 | Use SERVER_TYPE=teams for Teams on port 8003"
         exit 1
         ;;
 esac

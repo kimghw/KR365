@@ -2,30 +2,33 @@
 
 import json
 import os
+import secrets
 import sqlite3
 import subprocess
-import secrets
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from starlette.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
-from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.routing import Route
 
-from infra.core.logger import get_logger
 from infra.core.config import get_config
+from infra.core.logger import get_logger
 
 logger = get_logger(__name__)
 config = get_config()
 
 # Session storage (in-memory for simplicity)
-dashboard_sessions = {}  # {session_token: {"username": "admin", "created_at": timestamp}}
+dashboard_sessions = (
+    {}
+)  # {session_token: {"username": "admin", "created_at": timestamp}}
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / ".env"
 MAIL_QUERY_PID_FILE = Path("/tmp/mail_query_fastapi.pid")
 ONENOTE_PID_FILE = Path("/tmp/onenote_fastapi.pid")
+TEAMS_PID_FILE = Path("/tmp/teams_fastapi.pid")
 QUICK_TUNNEL_PID_FILE = Path("/tmp/quick_tunnel.pid")
 CLOUDFLARE_TUNNEL_PID_FILE = Path("/tmp/cloudflare_tunnel.pid")
 
@@ -34,21 +37,42 @@ MCP_SERVERS = {
     "mail_query": {
         "name": "Mail Query",
         "icon": "email",
-        "script": PROJECT_ROOT / "modules" / "outlook_mcp" / "entrypoints" / "run_fastapi.py",
+        "script": PROJECT_ROOT
+        / "modules"
+        / "outlook_mcp"
+        / "entrypoints"
+        / "run_fastapi.py",
         "pid_file": MAIL_QUERY_PID_FILE,
         "log_file": LOG_DIR / "mail_query_fastapi.log",
         "default_port": 8001,
-        "env_port_var": "MAIL_API_PORT"
+        "env_port_var": "MAIL_API_PORT",
     },
     "onenote": {
         "name": "OneNote",
         "icon": "note",
-        "script": PROJECT_ROOT / "modules" / "onenote_mcp" / "entrypoints" / "run_fastapi.py",
+        "script": PROJECT_ROOT
+        / "modules"
+        / "onenote_mcp"
+        / "entrypoints"
+        / "run_fastapi.py",
         "pid_file": ONENOTE_PID_FILE,
         "log_file": LOG_DIR / "onenote_fastapi.log",
         "default_port": 8002,
-        "env_port_var": "ONENOTE_SERVER_PORT"
-    }
+        "env_port_var": "ONENOTE_SERVER_PORT",
+    },
+    "teams": {
+        "name": "Teams",
+        "icon": "chat",
+        "script": PROJECT_ROOT
+        / "modules"
+        / "teams_mcp"
+        / "entrypoints"
+        / "run_fastapi.py",
+        "pid_file": TEAMS_PID_FILE,
+        "log_file": LOG_DIR / "teams_fastapi.log",
+        "default_port": 8003,
+        "env_port_var": "TEAMS_API_PORT",
+    },
 }
 
 
@@ -71,10 +95,11 @@ class DashboardAuth:
     def create_session(username: str) -> str:
         """Create a new session and return session token"""
         import time
+
         session_token = secrets.token_urlsafe(32)
         dashboard_sessions[session_token] = {
             "username": username,
-            "created_at": time.time()
+            "created_at": time.time(),
         }
         logger.info(f"Dashboard session created for user: {username}")
         return session_token
@@ -91,6 +116,7 @@ class DashboardAuth:
 
         # Check session expiry (24 hours)
         import time
+
         session_age = time.time() - session_data["created_at"]
         if session_age > 86400:  # 24 hours
             del dashboard_sessions[session_token]
@@ -118,7 +144,10 @@ class DashboardService:
         """
         try:
             if server_type not in MCP_SERVERS:
-                return {"success": False, "error": f"Unknown server type: {server_type}"}
+                return {
+                    "success": False,
+                    "error": f"Unknown server type: {server_type}",
+                }
 
             config = MCP_SERVERS[server_type]
             pid_file = config["pid_file"]
@@ -127,7 +156,11 @@ class DashboardService:
                 pid = int(pid_file.read_text().strip())
                 result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
                 if result.returncode == 0:
-                    return {"success": False, "error": f"{config['name']} server is already running", "pid": pid}
+                    return {
+                        "success": False,
+                        "error": f"{config['name']} server is already running",
+                        "pid": pid,
+                    }
 
             # Load environment variables from .env file
             env = os.environ.copy()
@@ -135,27 +168,41 @@ class DashboardService:
                 with open(ENV_FILE) as f:
                     for line in f:
                         line = line.strip()
-                        if line and not line.startswith('#') and '=' in line:
-                            key, value = line.split('=', 1)
+                        if line and not line.startswith("#") and "=" in line:
+                            key, value = line.split("=", 1)
                             env[key.strip()] = value.strip()
-                logger.info(f"✅ Loaded environment variables from {ENV_FILE} for server process")
+                logger.info(
+                    f"✅ Loaded environment variables from {ENV_FILE} for server process"
+                )
 
             # Get port from environment or use default
             server_port = os.getenv(config["env_port_var"], str(config["default_port"]))
 
             process = subprocess.Popen(
-                ["python3", str(config["script"]), "--host", "0.0.0.0", "--port", server_port],
-                stdout=open(config["log_file"], 'a'),
+                [
+                    "python3",
+                    str(config["script"]),
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    server_port,
+                ],
+                stdout=open(config["log_file"], "a"),
                 stderr=subprocess.STDOUT,
                 cwd=PROJECT_ROOT,
-                env=env
+                env=env,
             )
 
             # Save PID
             pid_file.write_text(str(process.pid))
             logger.info(f"Started {config['name']} MCP server with PID: {process.pid}")
 
-            return {"success": True, "pid": process.pid, "server_type": server_type, "port": server_port}
+            return {
+                "success": True,
+                "pid": process.pid,
+                "server_type": server_type,
+                "port": server_port,
+            }
         except Exception as e:
             logger.error(f"Error starting server: {e}")
             return {"success": False, "error": str(e)}
@@ -169,13 +216,19 @@ class DashboardService:
         """
         try:
             if server_type not in MCP_SERVERS:
-                return {"success": False, "error": f"Unknown server type: {server_type}"}
+                return {
+                    "success": False,
+                    "error": f"Unknown server type: {server_type}",
+                }
 
             config = MCP_SERVERS[server_type]
             pid_file = config["pid_file"]
 
             if not pid_file.exists():
-                return {"success": False, "error": f"{config['name']} server is not running"}
+                return {
+                    "success": False,
+                    "error": f"{config['name']} server is not running",
+                }
 
             pid = int(pid_file.read_text().strip())
 
@@ -183,6 +236,7 @@ class DashboardService:
             try:
                 subprocess.run(["kill", str(pid)], check=True)
                 import time
+
                 time.sleep(2)
 
                 # Force kill if still running
@@ -215,12 +269,21 @@ class DashboardService:
                 pid = int(QUICK_TUNNEL_PID_FILE.read_text().strip())
                 result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
                 if result.returncode == 0:
-                    return {"success": False, "error": f"Tunnel is already running (PID: {pid})", "pid": pid}
+                    return {
+                        "success": False,
+                        "error": f"Tunnel is already running (PID: {pid})",
+                        "pid": pid,
+                    }
 
             # Check if cloudflared exists
-            cloudflared_result = subprocess.run(["which", "cloudflared"], capture_output=True, text=True)
+            cloudflared_result = subprocess.run(
+                ["which", "cloudflared"], capture_output=True, text=True
+            )
             if cloudflared_result.returncode != 0:
-                return {"success": False, "error": "cloudflared not found. Please install it first."}
+                return {
+                    "success": False,
+                    "error": "cloudflared not found. Please install it first.",
+                }
 
             cloudflared_bin = cloudflared_result.stdout.strip()
             log_file = LOG_DIR / "quick_tunnel.log"
@@ -229,9 +292,9 @@ class DashboardService:
             logger.info(f"Starting Cloudflare tunnel for port {tunnel_port}")
             process = subprocess.Popen(
                 [cloudflared_bin, "tunnel", "--url", f"http://localhost:{tunnel_port}"],
-                stdout=open(log_file, 'w'),
+                stdout=open(log_file, "w"),
                 stderr=subprocess.STDOUT,
-                cwd=PROJECT_ROOT
+                cwd=PROJECT_ROOT,
             )
 
             # Save PID
@@ -239,20 +302,30 @@ class DashboardService:
             logger.info(f"Started Cloudflare tunnel with PID: {process.pid}")
 
             # Wait for URL to appear in log (max 20 seconds)
-            import time
             import re
+            import time
+
             tunnel_url = None
             for i in range(10):
                 time.sleep(2)
                 if log_file.exists():
                     log_content = log_file.read_text()
-                    match = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', log_content)
+                    match = re.search(
+                        r"https://[a-z0-9-]+\.trycloudflare\.com", log_content
+                    )
                     if match:
                         tunnel_url = match.group(0)
                         # Save to .env
-                        DashboardService.update_env_variable('CLOUDFLARE_TUNNEL_URL', tunnel_url)
-                        DashboardService.update_env_variable('DCR_OAUTH_REDIRECT_URI', f'{tunnel_url}/auth/callback')
-                        DashboardService.update_env_variable('AUTO_REGISTER_OAUTH_REDIRECT_URI', f'{tunnel_url}/enrollment/callback')
+                        DashboardService.update_env_variable(
+                            "CLOUDFLARE_TUNNEL_URL", tunnel_url
+                        )
+                        DashboardService.update_env_variable(
+                            "DCR_OAUTH_REDIRECT_URI", f"{tunnel_url}/auth/callback"
+                        )
+                        DashboardService.update_env_variable(
+                            "AUTO_REGISTER_OAUTH_REDIRECT_URI",
+                            f"{tunnel_url}/enrollment/callback",
+                        )
                         break
 
             return {
@@ -260,7 +333,11 @@ class DashboardService:
                 "pid": process.pid,
                 "port": tunnel_port,
                 "url": tunnel_url,
-                "message": f"Tunnel started on port {tunnel_port}. URL will appear in a few seconds." if not tunnel_url else f"Tunnel started on port {tunnel_port}: {tunnel_url}"
+                "message": (
+                    f"Tunnel started on port {tunnel_port}. URL will appear in a few seconds."
+                    if not tunnel_url
+                    else f"Tunnel started on port {tunnel_port}: {tunnel_url}"
+                ),
             }
         except Exception as e:
             logger.error(f"Error starting tunnel: {e}")
@@ -278,7 +355,7 @@ class DashboardService:
                 result = subprocess.run(
                     ["pgrep", "-f", "cloudflared.*tunnel.*--url"],
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 if result.returncode != 0 or not result.stdout.strip():
                     return {"success": False, "error": "Tunnel is not running"}
@@ -288,6 +365,7 @@ class DashboardService:
             try:
                 subprocess.run(["kill", str(pid)], check=True)
                 import time
+
                 time.sleep(2)
 
                 # Force kill if still running
@@ -313,14 +391,17 @@ class DashboardService:
             servers_status = {}
 
             for server_type, config in MCP_SERVERS.items():
-                port = int(os.getenv(config["env_port_var"], str(config["default_port"])))
+                port = int(
+                    os.getenv(config["env_port_var"], str(config["default_port"]))
+                )
                 pid_file = config["pid_file"]
 
                 # Check if server is responding on its port
                 import socket
+
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(1)
-                result = sock.connect_ex(('localhost', port))
+                result = sock.connect_ex(("localhost", port))
                 sock.close()
 
                 if result == 0:
@@ -330,7 +411,9 @@ class DashboardService:
                         try:
                             pid = int(pid_file.read_text().strip())
                             # Verify PID is valid
-                            subprocess.run(["ps", "-p", str(pid)], check=True, capture_output=True)
+                            subprocess.run(
+                                ["ps", "-p", str(pid)], check=True, capture_output=True
+                            )
                         except:
                             pid = None
 
@@ -338,7 +421,7 @@ class DashboardService:
                         "status": "running",
                         "pid": pid if pid else "unknown",
                         "endpoint": f"http://localhost:{port}",
-                        "port": port
+                        "port": port,
                     }
                 else:
                     # If not running on port, check PID file
@@ -348,19 +431,25 @@ class DashboardService:
                         result = subprocess.run(
                             ["ps", "-p", str(pid), "-o", "comm="],
                             capture_output=True,
-                            text=True
+                            text=True,
                         )
                         if result.returncode == 0 and "python" in result.stdout:
                             servers_status[server_type] = {
                                 "status": "starting",
                                 "pid": pid,
                                 "endpoint": f"http://localhost:{port}",
-                                "port": port
+                                "port": port,
                             }
                         else:
-                            servers_status[server_type] = {"status": "stopped", "port": port}
+                            servers_status[server_type] = {
+                                "status": "stopped",
+                                "port": port,
+                            }
                     else:
-                        servers_status[server_type] = {"status": "stopped", "port": port}
+                        servers_status[server_type] = {
+                            "status": "stopped",
+                            "port": port,
+                        }
 
             return servers_status
         except Exception as e:
@@ -377,10 +466,7 @@ class DashboardService:
             # Check PID file
             if QUICK_TUNNEL_PID_FILE.exists():
                 pid = int(QUICK_TUNNEL_PID_FILE.read_text().strip())
-                result = subprocess.run(
-                    ["ps", "-p", str(pid)],
-                    capture_output=True
-                )
+                result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
                 if result.returncode != 0:
                     pid = None
 
@@ -389,7 +475,7 @@ class DashboardService:
                 result = subprocess.run(
                     ["pgrep", "-f", "cloudflared.*tunnel.*--url"],
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     pid = int(result.stdout.strip().split()[0])
@@ -401,12 +487,15 @@ class DashboardService:
                     ps_result = subprocess.run(
                         ["ps", "-p", str(pid), "-o", "args="],
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
                     if ps_result.returncode == 0:
                         # Extract port from command like: cloudflared tunnel --url http://localhost:8001
                         import re
-                        port_match = re.search(r'--url\s+https?://localhost:(\d+)', ps_result.stdout)
+
+                        port_match = re.search(
+                            r"--url\s+https?://localhost:(\d+)", ps_result.stdout
+                        )
                         if port_match:
                             tunnel_port = int(port_match.group(1))
                 except:
@@ -417,7 +506,10 @@ class DashboardService:
                 if log_file.exists():
                     log_content = log_file.read_text()
                     import re
-                    match = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', log_content)
+
+                    match = re.search(
+                        r"https://[a-z0-9-]+\.trycloudflare\.com", log_content
+                    )
                     if match:
                         tunnel_url = match.group(0)
 
@@ -425,8 +517,12 @@ class DashboardService:
                 if not tunnel_url and ENV_FILE.exists():
                     env_content = ENV_FILE.read_text()
                     import re
+
                     # Look for DCR_OAUTH_REDIRECT_URI or AUTO_REGISTER_OAUTH_REDIRECT_URI
-                    match = re.search(r'(?:DCR_OAUTH_REDIRECT_URI|AUTO_REGISTER_OAUTH_REDIRECT_URI)=(https://[a-z0-9-]+\.trycloudflare\.com)', env_content)
+                    match = re.search(
+                        r"(?:DCR_OAUTH_REDIRECT_URI|AUTO_REGISTER_OAUTH_REDIRECT_URI)=(https://[a-z0-9-]+\.trycloudflare\.com)",
+                        env_content,
+                    )
                     if match:
                         tunnel_url = match.group(1)
 
@@ -435,9 +531,14 @@ class DashboardService:
                     try:
                         # cloudflared exposes metrics on localhost:60123 by default
                         import requests
-                        response = requests.get("http://127.0.0.1:60123/metrics", timeout=1)
+
+                        response = requests.get(
+                            "http://127.0.0.1:60123/metrics", timeout=1
+                        )
                         if response.status_code == 200:
-                            match = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', response.text)
+                            match = re.search(
+                                r"https://[a-z0-9-]+\.trycloudflare\.com", response.text
+                            )
                             if match:
                                 tunnel_url = match.group(0)
                     except:
@@ -447,7 +548,7 @@ class DashboardService:
                     "status": "running",
                     "pid": pid,
                     "port": tunnel_port if tunnel_port else "unknown",
-                    "url": tunnel_url
+                    "url": tunnel_url,
                 }
 
             return {"status": "stopped"}
@@ -462,10 +563,10 @@ class DashboardService:
         try:
             if ENV_FILE.exists():
                 content = ENV_FILE.read_text()
-                for line in content.split('\n'):
+                for line in content.split("\n"):
                     line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        key, value = line.split('=', 1)
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
                         env_vars[key.strip()] = value.strip()
         except Exception as e:
             logger.error(f"Error reading .env file: {e}")
@@ -479,14 +580,14 @@ class DashboardService:
                 ENV_FILE.touch()
 
             content = ENV_FILE.read_text()
-            lines = content.split('\n')
+            lines = content.split("\n")
             updated = False
 
             # Update existing key
             for i, line in enumerate(lines):
-                if line.strip() and not line.strip().startswith('#'):
-                    if '=' in line:
-                        existing_key = line.split('=', 1)[0].strip()
+                if line.strip() and not line.strip().startswith("#"):
+                    if "=" in line:
+                        existing_key = line.split("=", 1)[0].strip()
                         if existing_key == key:
                             lines[i] = f"{key}={value}"
                             updated = True
@@ -496,7 +597,7 @@ class DashboardService:
             if not updated:
                 lines.append(f"{key}={value}")
 
-            ENV_FILE.write_text('\n'.join(lines))
+            ENV_FILE.write_text("\n".join(lines))
             logger.info(f"Updated env variable: {key}")
             return True
         except Exception as e:
@@ -511,15 +612,17 @@ class DashboardService:
             if LOG_DIR.exists():
                 for log_file in LOG_DIR.glob("*.log"):
                     size = log_file.stat().st_size
-                    log_files.append({
-                        "name": log_file.name,
-                        "path": str(log_file),
-                        "size": size,
-                        "size_mb": round(size / 1024 / 1024, 2)
-                    })
+                    log_files.append(
+                        {
+                            "name": log_file.name,
+                            "path": str(log_file),
+                            "size": size,
+                            "size_mb": round(size / 1024 / 1024, 2),
+                        }
+                    )
         except Exception as e:
             logger.error(f"Error listing log files: {e}")
-        return sorted(log_files, key=lambda x: x['name'])
+        return sorted(log_files, key=lambda x: x["name"])
 
     @staticmethod
     def get_log_content(log_name: str, lines: int = 100) -> str:
@@ -533,7 +636,7 @@ class DashboardService:
             result = subprocess.run(
                 ["tail", "-n", str(lines), str(log_file)],
                 capture_output=True,
-                text=True
+                text=True,
             )
             return result.stdout
         except Exception as e:
@@ -554,41 +657,33 @@ class DashboardService:
                     "name": "Mail Query",
                     "path": "/mail-query/",
                     "url": f"{base_url}/mail-query/",
-                    "health": f"{base_url}/mail-query/health"
+                    "health": f"{base_url}/mail-query/health",
                 },
                 {
                     "name": "Enrollment",
                     "path": "/enrollment/",
                     "url": f"{base_url}/enrollment/",
-                    "oauth_callback": f"{base_url}/enrollment/callback"
+                    "oauth_callback": f"{base_url}/enrollment/callback",
                 },
-                {
-                    "name": "OneNote",
-                    "path": "/onenote/",
-                    "url": f"{base_url}/onenote/"
-                },
+                {"name": "OneNote", "path": "/onenote/", "url": f"{base_url}/onenote/"},
                 {
                     "name": "OneDrive",
                     "path": "/onedrive/",
-                    "url": f"{base_url}/onedrive/"
+                    "url": f"{base_url}/onedrive/",
                 },
-                {
-                    "name": "Teams",
-                    "path": "/teams/",
-                    "url": f"{base_url}/teams/"
-                }
+                {"name": "Teams", "path": "/teams/", "url": f"{base_url}/teams/"},
             ],
             "oauth": {
                 "authorize": f"{base_url}/oauth/authorize",
                 "token": f"{base_url}/oauth/token",
                 "register": f"{base_url}/oauth/register",
-                "azure_callback": f"{base_url}/oauth/azure_callback"
+                "azure_callback": f"{base_url}/oauth/azure_callback",
             },
             "redirect_uris": {
                 "DCR_OAUTH_REDIRECT_URI": f"{base_url}/oauth/azure_callback",
-                "AUTO_REGISTER_OAUTH_REDIRECT_URI": f"{base_url}/enrollment/callback"
+                "AUTO_REGISTER_OAUTH_REDIRECT_URI": f"{base_url}/enrollment/callback",
             },
-            "health": f"{base_url}/health"
+            "health": f"{base_url}/health",
         }
 
     @staticmethod
@@ -597,50 +692,63 @@ class DashboardService:
         databases = []
 
         # Main database
-        if hasattr(config, 'database_path'):
+        if hasattr(config, "database_path"):
             db_path = Path(config.database_path)
-            logger.info(f"[OnRender Debug] Main DB path: {db_path}, exists: {db_path.exists()}")
+            logger.info(
+                f"[OnRender Debug] Main DB path: {db_path}, exists: {db_path.exists()}"
+            )
             if db_path.exists():
-                databases.append({
-                    "name": "Main Database (graphapi.db)",
-                    "path": str(db_path),
-                    "size": db_path.stat().st_size,
-                    "size_mb": round(db_path.stat().st_size / 1024 / 1024, 2)
-                })
+                databases.append(
+                    {
+                        "name": "Main Database (graphapi.db)",
+                        "path": str(db_path),
+                        "size": db_path.stat().st_size,
+                        "size_mb": round(db_path.stat().st_size / 1024 / 1024, 2),
+                    }
+                )
             else:
                 # 경로가 존재하지 않아도 리스트에 추가하여 문제 파악
-                databases.append({
-                    "name": "Main Database (graphapi.db) - NOT FOUND",
-                    "path": str(db_path),
-                    "size": 0,
-                    "size_mb": 0,
-                    "error": f"File not exists at {db_path}"
-                })
+                databases.append(
+                    {
+                        "name": "Main Database (graphapi.db) - NOT FOUND",
+                        "path": str(db_path),
+                        "size": 0,
+                        "size_mb": 0,
+                        "error": f"File not exists at {db_path}",
+                    }
+                )
 
         # DCR database
-        if hasattr(config, 'dcr_database_path'):
+        if hasattr(config, "dcr_database_path"):
             dcr_db_path = Path(config.dcr_database_path)
-            logger.info(f"[OnRender Debug] DCR DB path: {dcr_db_path}, exists: {dcr_db_path.exists()}")
+            logger.info(
+                f"[OnRender Debug] DCR DB path: {dcr_db_path}, exists: {dcr_db_path.exists()}"
+            )
             if dcr_db_path.exists():
-                databases.append({
-                    "name": "DCR Database (dcr.db)",
-                    "path": str(dcr_db_path),
-                    "size": dcr_db_path.stat().st_size,
-                    "size_mb": round(dcr_db_path.stat().st_size / 1024 / 1024, 2)
-                })
+                databases.append(
+                    {
+                        "name": "DCR Database (dcr.db)",
+                        "path": str(dcr_db_path),
+                        "size": dcr_db_path.stat().st_size,
+                        "size_mb": round(dcr_db_path.stat().st_size / 1024 / 1024, 2),
+                    }
+                )
             else:
                 # 경로가 존재하지 않아도 리스트에 추가하여 문제 파악
-                databases.append({
-                    "name": "DCR Database (dcr.db) - NOT FOUND",
-                    "path": str(dcr_db_path),
-                    "size": 0,
-                    "size_mb": 0,
-                    "error": f"File not exists at {dcr_db_path}"
-                })
+                databases.append(
+                    {
+                        "name": "DCR Database (dcr.db) - NOT FOUND",
+                        "path": str(dcr_db_path),
+                        "size": 0,
+                        "size_mb": 0,
+                        "error": f"File not exists at {dcr_db_path}",
+                    }
+                )
 
         # Logs database
         # logs.db 경로 결정 (LogsDBService와 동일한 로직 사용)
         import os
+
         if os.getenv("RENDER"):
             # OnRender 환경
             logs_db_path = Path("/opt/render/project/src/data/logs.db")
@@ -649,36 +757,44 @@ class DashboardService:
             project_root = Path(__file__).parent.parent.parent
             logs_db_path = project_root / "data" / "logs.db"
 
-        logger.info(f"[OnRender Debug] Logs DB path: {logs_db_path}, exists: {logs_db_path.exists()}")
+        logger.info(
+            f"[OnRender Debug] Logs DB path: {logs_db_path}, exists: {logs_db_path.exists()}"
+        )
 
         if logs_db_path.exists():
-            databases.append({
-                "name": "Logs Database (logs.db)",
-                "path": str(logs_db_path),
-                "size": logs_db_path.stat().st_size,
-                "size_mb": round(logs_db_path.stat().st_size / 1024 / 1024, 2)
-            })
+            databases.append(
+                {
+                    "name": "Logs Database (logs.db)",
+                    "path": str(logs_db_path),
+                    "size": logs_db_path.stat().st_size,
+                    "size_mb": round(logs_db_path.stat().st_size / 1024 / 1024, 2),
+                }
+            )
         else:
-            databases.append({
-                "name": "Logs Database (logs.db) - NOT FOUND",
-                "path": str(logs_db_path),
-                "size": 0,
-                "size_mb": 0,
-                "error": f"File not exists at {logs_db_path}"
-            })
+            databases.append(
+                {
+                    "name": "Logs Database (logs.db) - NOT FOUND",
+                    "path": str(logs_db_path),
+                    "size": 0,
+                    "size_mb": 0,
+                    "error": f"File not exists at {logs_db_path}",
+                }
+            )
 
         # OnRender 환경 디버깅 정보 추가
-        databases.append({
-            "name": "Debug Info",
-            "path": f"CWD: {os.getcwd()}",
-            "size": 0,
-            "size_mb": 0,
-            "info": {
-                "RENDER": os.getenv("RENDER", "Not set"),
-                "PWD": os.getenv("PWD", "Not set"),
-                "HOME": os.getenv("HOME", "Not set")
+        databases.append(
+            {
+                "name": "Debug Info",
+                "path": f"CWD: {os.getcwd()}",
+                "size": 0,
+                "size_mb": 0,
+                "info": {
+                    "RENDER": os.getenv("RENDER", "Not set"),
+                    "PWD": os.getenv("PWD", "Not set"),
+                    "HOME": os.getenv("HOME", "Not set"),
+                },
             }
-        })
+        )
 
         return databases
 
@@ -688,7 +804,9 @@ class DashboardService:
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
             tables = [row[0] for row in cursor.fetchall()]
             conn.close()
             return tables
@@ -711,13 +829,21 @@ class DashboardService:
             cursor = conn.cursor()
 
             # Add LIMIT only if explicitly requested
-            if limit and query.strip().upper().startswith('SELECT') and 'LIMIT' not in query.upper():
+            if (
+                limit
+                and query.strip().upper().startswith("SELECT")
+                and "LIMIT" not in query.upper()
+            ):
                 query = f"{query.strip().rstrip(';')} LIMIT {limit}"
 
             cursor.execute(query)
 
             # Get column names
-            columns = [description[0] for description in cursor.description] if cursor.description else []
+            columns = (
+                [description[0] for description in cursor.description]
+                if cursor.description
+                else []
+            )
 
             # Get rows
             rows = []
@@ -730,14 +856,11 @@ class DashboardService:
                 "success": True,
                 "columns": columns,
                 "rows": rows,
-                "row_count": len(rows)
+                "row_count": len(rows),
             }
         except Exception as e:
             logger.error(f"Error querying database: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     @staticmethod
     def get_table_schema(db_path: str, table_name: str) -> List[Dict]:
@@ -748,14 +871,16 @@ class DashboardService:
             cursor.execute(f"PRAGMA table_info({table_name})")
             schema = []
             for row in cursor.fetchall():
-                schema.append({
-                    "cid": row[0],
-                    "name": row[1],
-                    "type": row[2],
-                    "notnull": bool(row[3]),
-                    "default_value": row[4],
-                    "pk": bool(row[5])
-                })
+                schema.append(
+                    {
+                        "cid": row[0],
+                        "name": row[1],
+                        "type": row[2],
+                        "notnull": bool(row[3]),
+                        "default_value": row[4],
+                        "pk": bool(row[5]),
+                    }
+                )
             conn.close()
             return schema
         except Exception as e:
@@ -771,7 +896,7 @@ class DashboardService:
                 return {"success": False, "error": f"Log file not found: {log_name}"}
 
             # Truncate the file
-            with open(log_file, 'w') as f:
+            with open(log_file, "w") as f:
                 f.truncate(0)
 
             logger.info(f"Cleared log file: {log_name}")
@@ -790,7 +915,7 @@ class DashboardService:
             if LOG_DIR.exists():
                 for log_file in LOG_DIR.glob("*.log"):
                     try:
-                        with open(log_file, 'w') as f:
+                        with open(log_file, "w") as f:
                             f.truncate(0)
                         cleared_files.append(log_file.name)
                     except Exception as e:
@@ -802,7 +927,7 @@ class DashboardService:
                 "success": True,
                 "cleared": cleared_files,
                 "failed": failed_files,
-                "message": f"Cleared {len(cleared_files)} log files"
+                "message": f"Cleared {len(cleared_files)} log files",
             }
         except Exception as e:
             logger.error(f"Error clearing all logs: {e}")
@@ -816,7 +941,9 @@ class DashboardService:
             cursor = conn.cursor()
 
             # Get all table names
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
             tables = [row[0] for row in cursor.fetchall()]
 
             cleared_tables = []
@@ -838,7 +965,7 @@ class DashboardService:
                 "success": True,
                 "cleared_tables": cleared_tables,
                 "failed_tables": failed_tables,
-                "message": f"Cleared {len(cleared_tables)} tables"
+                "message": f"Cleared {len(cleared_tables)} tables",
             }
         except Exception as e:
             logger.error(f"Error clearing database: {e}")
@@ -856,12 +983,14 @@ class DashboardService:
             cursor.execute("PRAGMA foreign_keys = OFF")
 
             # Get all table names (exclude SQLite internal tables)
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT name FROM sqlite_master
                 WHERE type='table'
                 AND name NOT LIKE 'sqlite_%'
                 AND name NOT IN ('sqlite_sequence', 'sqlite_stat1', 'sqlite_stat2', 'sqlite_stat3', 'sqlite_stat4')
-            """)
+            """
+            )
             tables = [row[0] for row in cursor.fetchall()]
 
             # Also get views and triggers to drop them first
@@ -907,8 +1036,12 @@ class DashboardService:
                         except Exception as e:
                             remaining_tables.append(table)
                             if attempt == max_attempts - 1:
-                                failed_items.append({"item": f"table:{table}", "error": str(e)})
-                                logger.error(f"Failed to drop table {table} after {max_attempts} attempts: {e}")
+                                failed_items.append(
+                                    {"item": f"table:{table}", "error": str(e)}
+                                )
+                                logger.error(
+                                    f"Failed to drop table {table} after {max_attempts} attempts: {e}"
+                                )
                 tables = remaining_tables
                 if not tables:
                     break
@@ -922,14 +1055,18 @@ class DashboardService:
             conn.close()
 
             # Count only tables from dropped_items
-            dropped_tables = [item for item in dropped_items if item.startswith("table:")]
-            logger.info(f"Dropped {len(dropped_tables)} tables, {len(dropped_items)} total items in database: {db_path}")
+            dropped_tables = [
+                item for item in dropped_items if item.startswith("table:")
+            ]
+            logger.info(
+                f"Dropped {len(dropped_tables)} tables, {len(dropped_items)} total items in database: {db_path}"
+            )
 
             return {
                 "success": True,
                 "dropped_items": dropped_items,
                 "failed_items": failed_items,
-                "message": f"Dropped {len(dropped_tables)} tables, {len(dropped_items)} total database objects"
+                "message": f"Dropped {len(dropped_tables)} tables, {len(dropped_items)} total database objects",
             }
         except Exception as e:
             logger.error(f"Error resetting database: {e}")
@@ -948,11 +1085,13 @@ class DashboardService:
             cursor = conn.cursor()
 
             # Get Azure app config
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT application_id, tenant_id, redirect_uri
                 FROM dcr_azure_app
                 LIMIT 1
-            """)
+            """
+            )
             result = cursor.fetchone()
             conn.close()
 
@@ -962,12 +1101,12 @@ class DashboardService:
                     "application_id": result[0],
                     "tenant_id": result[1],
                     "redirect_uri": result[2],
-                    "env_redirect_uri": os.getenv("DCR_OAUTH_REDIRECT_URI")
+                    "env_redirect_uri": os.getenv("DCR_OAUTH_REDIRECT_URI"),
                 }
             else:
                 return {
                     "success": False,
-                    "error": "No DCR configuration found in database"
+                    "error": "No DCR configuration found in database",
                 }
         except Exception as e:
             logger.error(f"Error getting DCR config: {e}")
@@ -991,25 +1130,33 @@ class DashboardService:
                 count = cursor.fetchone()[0]
 
                 if count > 0:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE dcr_azure_app
                         SET redirect_uri = ?
                         WHERE 1=1
-                    """, (new_redirect_uri,))
+                    """,
+                        (new_redirect_uri,),
+                    )
                     conn.commit()
                     conn.close()
 
                     # Also update .env file
-                    DashboardService.update_env_variable('DCR_OAUTH_REDIRECT_URI', new_redirect_uri)
+                    DashboardService.update_env_variable(
+                        "DCR_OAUTH_REDIRECT_URI", new_redirect_uri
+                    )
 
                     logger.info(f"Updated DCR redirect URI to: {new_redirect_uri}")
                     return {
                         "success": True,
-                        "message": f"DCR redirect URI updated to: {new_redirect_uri}"
+                        "message": f"DCR redirect URI updated to: {new_redirect_uri}",
                     }
                 else:
                     conn.close()
-                    return {"success": False, "error": "No DCR configuration found in database"}
+                    return {
+                        "success": False,
+                        "error": "No DCR configuration found in database",
+                    }
             else:
                 return {"success": False, "error": "DCR database not found"}
 
@@ -1181,8 +1328,8 @@ def create_dashboard_routes() -> List[Route]:
         """Handle login request"""
         try:
             data = await request.json()
-            username = data.get('username', '')
-            password = data.get('password', '')
+            username = data.get("username", "")
+            password = data.get("password", "")
 
             if auth.verify_credentials(username, password):
                 session_token = auth.create_session(username)
@@ -1194,20 +1341,19 @@ def create_dashboard_routes() -> List[Route]:
                     value=session_token,
                     httponly=True,
                     max_age=86400,  # 24 hours
-                    samesite="lax"
+                    samesite="lax",
                 )
                 return response
             else:
                 logger.warning(f"Failed login attempt for username: {username}")
                 return JSONResponse(
                     {"success": False, "error": "Invalid username or password"},
-                    status_code=401
+                    status_code=401,
                 )
         except Exception as e:
             logger.error(f"Login error: {e}")
             return JSONResponse(
-                {"success": False, "error": "Login failed"},
-                status_code=500
+                {"success": False, "error": "Login failed"}, status_code=500
             )
 
     # Logout API
@@ -1532,6 +1678,16 @@ def create_dashboard_routes() -> List[Route]:
                 </div>
             </div>
 
+            <!-- Teams Server Status -->
+            <div class="card">
+                <h2><span class="material-icons">chat</span> Teams MCP Server</h2>
+                <div id="teams-server-status">Loading...</div>
+                <div style="margin-top: 15px; display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="startServer('teams')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start</button>
+                    <button class="btn btn-danger" onclick="stopServer('teams')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop</button>
+                </div>
+            </div>
+
             <!-- Tunnel Status -->
             <div class="card">
                 <h2><span class="material-icons">public</span> Cloudflare Tunnel</h2>
@@ -1759,6 +1915,30 @@ def create_dashboard_routes() -> List[Route]:
                     </div>
                 ` : `<span class="status-badge status-stopped">STOPPED</span>`;
 
+                // Render Teams server status
+                const teamsServer = data.server.teams || {status: 'stopped'};
+                const teamsHtml = teamsServer.status === 'running' ? `
+                    <span class="status-badge status-running">RUNNING</span>
+                    <div class="info-row">
+                        <span class="info-label">PID:</span>
+                        <span class="info-value">${teamsServer.pid}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Endpoint:</span>
+                        <span class="info-value">
+                            <a href="${teamsServer.endpoint}/health" target="_blank" class="url-copy">
+                                ${teamsServer.endpoint}
+                            </a>
+                        </span>
+                    </div>
+                ` : teamsServer.status === 'starting' ? `
+                    <span class="status-badge" style="background: #f59e0b;">STARTING</span>
+                    <div class="info-row">
+                        <span class="info-label">PID:</span>
+                        <span class="info-value">${teamsServer.pid}</span>
+                    </div>
+                ` : `<span class="status-badge status-stopped">STOPPED</span>`;
+
                 const tunnelHtml = data.tunnel.status === 'running' ? `
                     <span class="status-badge status-running">RUNNING</span>
                     <div class="info-row">
@@ -1784,6 +1964,7 @@ def create_dashboard_routes() -> List[Route]:
 
                 document.getElementById('mail-query-server-status').innerHTML = mailQueryHtml;
                 document.getElementById('onenote-server-status').innerHTML = onenoteHtml;
+                document.getElementById('teams-server-status').innerHTML = teamsHtml;
                 document.getElementById('tunnel-status').innerHTML = tunnelHtml;
 
                 // Load endpoints with tunnel URL
@@ -2477,13 +2658,14 @@ def create_dashboard_routes() -> List[Route]:
     # Require authentication wrapper
     def require_auth(handler):
         """Decorator to require authentication for API endpoints"""
+
         async def wrapper(request):
             if not check_session(request):
                 return JSONResponse(
-                    {"error": "Authentication required"},
-                    status_code=401
+                    {"error": "Authentication required"}, status_code=401
                 )
             return await handler(request)
+
         return wrapper
 
     # API: Get status
@@ -2494,17 +2676,18 @@ def create_dashboard_routes() -> List[Route]:
 
         server_status = service.get_server_status()
         tunnel_status = service.get_tunnel_status()
-        return JSONResponse({
-            "server": server_status,
-            "tunnel": tunnel_status
-        })
+        return JSONResponse({"server": server_status, "tunnel": tunnel_status})
 
     # API: Start server
     async def api_start_server(request):
         """Start MCP server"""
         try:
-            body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
-            server_type = body.get('server_type', 'mail_query')
+            body = (
+                await request.json()
+                if request.headers.get("content-type") == "application/json"
+                else {}
+            )
+            server_type = body.get("server_type", "mail_query")
             result = service.start_server(server_type=server_type)
         except:
             result = service.start_server()
@@ -2514,8 +2697,12 @@ def create_dashboard_routes() -> List[Route]:
     async def api_stop_server(request):
         """Stop MCP server"""
         try:
-            body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
-            server_type = body.get('server_type', 'mail_query')
+            body = (
+                await request.json()
+                if request.headers.get("content-type") == "application/json"
+                else {}
+            )
+            server_type = body.get("server_type", "mail_query")
             result = service.stop_server(server_type=server_type)
         except:
             result = service.stop_server()
@@ -2526,8 +2713,12 @@ def create_dashboard_routes() -> List[Route]:
         """Start Cloudflare tunnel with optional port"""
         try:
             # Get port from request body if provided
-            body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
-            port = body.get('port')
+            body = (
+                await request.json()
+                if request.headers.get("content-type") == "application/json"
+                else {}
+            )
+            port = body.get("port")
             result = service.start_tunnel(port=port)
         except:
             # Fallback to default if no port provided
@@ -2543,7 +2734,7 @@ def create_dashboard_routes() -> List[Route]:
     # API: Get endpoints
     async def api_endpoints(request):
         """Get endpoints information"""
-        tunnel_url = request.query_params.get('tunnel_url')
+        tunnel_url = request.query_params.get("tunnel_url")
         endpoints = service.get_endpoints_info(tunnel_url)
         return JSONResponse(endpoints)
 
@@ -2558,8 +2749,8 @@ def create_dashboard_routes() -> List[Route]:
         """Update environment variable"""
         try:
             data = await request.json()
-            key = data.get('key')
-            value = data.get('value', '')
+            key = data.get("key")
+            value = data.get("value", "")
 
             if not key:
                 return JSONResponse({"error": "Key is required"}, status_code=400)
@@ -2582,8 +2773,8 @@ def create_dashboard_routes() -> List[Route]:
     # API: Get log content
     async def api_log_content(request):
         """Get log file content"""
-        log_name = request.path_params['log_name']
-        lines = int(request.query_params.get('lines', 100))
+        log_name = request.path_params["log_name"]
+        lines = int(request.query_params.get("lines", 100))
         content = service.get_log_content(log_name, lines)
         return Response(content, media_type="text/plain")
 
@@ -2596,7 +2787,7 @@ def create_dashboard_routes() -> List[Route]:
     # API: Get database tables
     async def api_db_tables(request):
         """Get tables in a database"""
-        db_path = request.query_params.get('db_path')
+        db_path = request.query_params.get("db_path")
         if not db_path:
             return JSONResponse({"error": "db_path required"}, status_code=400)
         tables = service.get_database_tables(db_path)
@@ -2605,10 +2796,12 @@ def create_dashboard_routes() -> List[Route]:
     # API: Get table schema
     async def api_table_schema(request):
         """Get schema for a table"""
-        db_path = request.query_params.get('db_path')
-        table_name = request.query_params.get('table')
+        db_path = request.query_params.get("db_path")
+        table_name = request.query_params.get("table")
         if not db_path or not table_name:
-            return JSONResponse({"error": "db_path and table required"}, status_code=400)
+            return JSONResponse(
+                {"error": "db_path and table required"}, status_code=400
+            )
         schema = service.get_table_schema(db_path, table_name)
         return JSONResponse({"schema": schema})
 
@@ -2617,12 +2810,14 @@ def create_dashboard_routes() -> List[Route]:
         """Execute SQL query"""
         try:
             data = await request.json()
-            db_path = data.get('db_path')
-            query = data.get('query')
-            limit = data.get('limit', None)  # Make limit optional
+            db_path = data.get("db_path")
+            query = data.get("query")
+            limit = data.get("limit", None)  # Make limit optional
 
             if not db_path or not query:
-                return JSONResponse({"error": "db_path and query required"}, status_code=400)
+                return JSONResponse(
+                    {"error": "db_path and query required"}, status_code=400
+                )
 
             result = service.query_database(db_path, query, limit)
             return JSONResponse(result)
@@ -2633,7 +2828,7 @@ def create_dashboard_routes() -> List[Route]:
     # API: Clear log file
     async def api_clear_log(request):
         """Clear a specific log file"""
-        log_name = request.path_params['log_name']
+        log_name = request.path_params["log_name"]
         result = service.clear_log_file(log_name)
         return JSONResponse(result)
 
@@ -2648,7 +2843,7 @@ def create_dashboard_routes() -> List[Route]:
         """Clear all data from database"""
         try:
             data = await request.json()
-            db_path = data.get('db_path')
+            db_path = data.get("db_path")
             if not db_path:
                 return JSONResponse({"error": "db_path required"}, status_code=400)
             result = service.clear_database(db_path)
@@ -2662,7 +2857,7 @@ def create_dashboard_routes() -> List[Route]:
         """Completely reset database (drop all tables)"""
         try:
             data = await request.json()
-            db_path = data.get('db_path')
+            db_path = data.get("db_path")
             if not db_path:
                 return JSONResponse({"error": "db_path required"}, status_code=400)
             result = service.reset_database(db_path)
@@ -2691,11 +2886,7 @@ def create_dashboard_routes() -> List[Route]:
 
             logs = dcr_logger.get_recent_logs(limit, operation)
 
-            return JSONResponse({
-                "success": True,
-                "count": len(logs),
-                "logs": logs
-            })
+            return JSONResponse({"success": True, "count": len(logs), "logs": logs})
 
         except Exception as e:
             logger.error(f"Error getting DCR logs: {e}")
@@ -2710,10 +2901,7 @@ def create_dashboard_routes() -> List[Route]:
             dcr_logger = get_dcr_db_logger()
             stats = dcr_logger.get_statistics()
 
-            return JSONResponse({
-                "success": True,
-                "statistics": stats
-            })
+            return JSONResponse({"success": True, "statistics": stats})
 
         except Exception as e:
             logger.error(f"Error getting DCR log stats: {e}")
@@ -2724,7 +2912,7 @@ def create_dashboard_routes() -> List[Route]:
         """Update DCR redirect URI"""
         try:
             data = await request.json()
-            new_redirect_uri = data.get('redirect_uri')
+            new_redirect_uri = data.get("redirect_uri")
             if not new_redirect_uri:
                 return JSONResponse({"error": "redirect_uri required"}, status_code=400)
             result = service.update_dcr_redirect_uri(new_redirect_uri)
@@ -2741,25 +2929,51 @@ def create_dashboard_routes() -> List[Route]:
         # Dashboard routes (auth required)
         Route("/dashboard", endpoint=dashboard_page, methods=["GET"]),
         Route("/dashboard/api/status", endpoint=api_status, methods=["GET"]),
-        Route("/dashboard/api/server/start", endpoint=api_start_server, methods=["POST"]),
+        Route(
+            "/dashboard/api/server/start", endpoint=api_start_server, methods=["POST"]
+        ),
         Route("/dashboard/api/server/stop", endpoint=api_stop_server, methods=["POST"]),
-        Route("/dashboard/api/tunnel/start", endpoint=api_start_tunnel, methods=["POST"]),
+        Route(
+            "/dashboard/api/tunnel/start", endpoint=api_start_tunnel, methods=["POST"]
+        ),
         Route("/dashboard/api/tunnel/stop", endpoint=api_stop_tunnel, methods=["POST"]),
         Route("/dashboard/api/endpoints", endpoint=api_endpoints, methods=["GET"]),
         Route("/dashboard/api/env", endpoint=api_get_env, methods=["GET"]),
         Route("/dashboard/api/env", endpoint=api_update_env, methods=["POST"]),
         Route("/dashboard/api/logs", endpoint=api_logs, methods=["GET"]),
-        Route("/dashboard/api/logs/{log_name:path}", endpoint=api_log_content, methods=["GET"]),
+        Route(
+            "/dashboard/api/logs/{log_name:path}",
+            endpoint=api_log_content,
+            methods=["GET"],
+        ),
         Route("/dashboard/api/databases", endpoint=api_databases, methods=["GET"]),
         Route("/dashboard/api/db/tables", endpoint=api_db_tables, methods=["GET"]),
         Route("/dashboard/api/db/schema", endpoint=api_table_schema, methods=["GET"]),
         Route("/dashboard/api/db/query", endpoint=api_query_db, methods=["POST"]),
-        Route("/dashboard/api/logs/{log_name:path}/clear", endpoint=api_clear_log, methods=["POST"]),
-        Route("/dashboard/api/logs/clear-all", endpoint=api_clear_all_logs, methods=["POST"]),
+        Route(
+            "/dashboard/api/logs/{log_name:path}/clear",
+            endpoint=api_clear_log,
+            methods=["POST"],
+        ),
+        Route(
+            "/dashboard/api/logs/clear-all",
+            endpoint=api_clear_all_logs,
+            methods=["POST"],
+        ),
         Route("/dashboard/api/db/clear", endpoint=api_clear_database, methods=["POST"]),
         Route("/dashboard/api/db/reset", endpoint=api_reset_database, methods=["POST"]),
-        Route("/dashboard/api/dcr/config", endpoint=api_get_dcr_config, methods=["GET"]),
-        Route("/dashboard/api/dcr/redirect-uri", endpoint=api_update_dcr_redirect_uri, methods=["POST"]),
+        Route(
+            "/dashboard/api/dcr/config", endpoint=api_get_dcr_config, methods=["GET"]
+        ),
+        Route(
+            "/dashboard/api/dcr/redirect-uri",
+            endpoint=api_update_dcr_redirect_uri,
+            methods=["POST"],
+        ),
         Route("/dashboard/api/dcr/logs", endpoint=api_get_dcr_logs, methods=["GET"]),
-        Route("/dashboard/api/dcr/logs/stats", endpoint=api_get_dcr_log_stats, methods=["GET"]),
+        Route(
+            "/dashboard/api/dcr/logs/stats",
+            endpoint=api_get_dcr_log_stats,
+            methods=["GET"],
+        ),
     ]

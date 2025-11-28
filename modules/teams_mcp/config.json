@@ -1,0 +1,18 @@
+{
+  "dcr_oauth": {
+    "module_name": "teams",
+    "required_scopes": [
+      "User.Read",
+      "Chat.ReadWrite",
+      "ChatMessage.Read",
+      "ChatMessage.Send",
+      "offline_access"
+    ]
+  },
+  "request_logging": {
+    "enabled": true,
+    "log_headers": true,
+    "log_body": false,
+    "exclude_paths": ["/health", "/ping", "/.well-known/mcp.json"]
+  }
+}
