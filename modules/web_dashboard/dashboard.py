@@ -25,7 +25,31 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / ".env"
 MAIL_QUERY_PID_FILE = Path("/tmp/mail_query_fastapi.pid")
+ONENOTE_PID_FILE = Path("/tmp/onenote_fastapi.pid")
 QUICK_TUNNEL_PID_FILE = Path("/tmp/quick_tunnel.pid")
+CLOUDFLARE_TUNNEL_PID_FILE = Path("/tmp/cloudflare_tunnel.pid")
+
+# MCP Server configurations
+MCP_SERVERS = {
+    "mail_query": {
+        "name": "Mail Query",
+        "icon": "email",
+        "script": PROJECT_ROOT / "modules" / "outlook_mcp" / "entrypoints" / "run_fastapi.py",
+        "pid_file": MAIL_QUERY_PID_FILE,
+        "log_file": LOG_DIR / "mail_query_fastapi.log",
+        "default_port": 8001,
+        "env_port_var": "MAIL_API_PORT"
+    },
+    "onenote": {
+        "name": "OneNote",
+        "icon": "note",
+        "script": PROJECT_ROOT / "modules" / "onenote_mcp" / "entrypoints" / "run_fastapi.py",
+        "pid_file": ONENOTE_PID_FILE,
+        "log_file": LOG_DIR / "onenote_fastapi.log",
+        "default_port": 8002,
+        "env_port_var": "ONENOTE_SERVER_PORT"
+    }
+}
 
 
 class DashboardAuth:
@@ -86,18 +110,24 @@ class DashboardService:
     """Service for managing dashboard operations"""
 
     @staticmethod
-    def start_server() -> Dict:
-        """Start Mail Query MCP server"""
+    def start_server(server_type: str = "mail_query") -> Dict:
+        """Start MCP server
+
+        Args:
+            server_type: Type of server to start ("mail_query" or "onenote")
+        """
         try:
-            if MAIL_QUERY_PID_FILE.exists():
-                pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
+            if server_type not in MCP_SERVERS:
+                return {"success": False, "error": f"Unknown server type: {server_type}"}
+
+            config = MCP_SERVERS[server_type]
+            pid_file = config["pid_file"]
+
+            if pid_file.exists():
+                pid = int(pid_file.read_text().strip())
                 result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
                 if result.returncode == 0:
-                    return {"success": False, "error": "Server is already running", "pid": pid}
-
-            # Start server
-            server_script = PROJECT_ROOT / "modules" / "outlook_mcp" / "entrypoints" / "run_fastapi.py"
-            log_file = LOG_DIR / "mail_query_fastapi.log"
+                    return {"success": False, "error": f"{config['name']} server is already running", "pid": pid}
 
             # Load environment variables from .env file
             env = os.environ.copy()
@@ -110,34 +140,44 @@ class DashboardService:
                             env[key.strip()] = value.strip()
                 logger.info(f"✅ Loaded environment variables from {ENV_FILE} for server process")
 
-            # Use MAIL_API_PORT from environment or default to 8001
-            server_port = os.getenv("MAIL_API_PORT", "8001")
+            # Get port from environment or use default
+            server_port = os.getenv(config["env_port_var"], str(config["default_port"]))
 
             process = subprocess.Popen(
-                ["python3", str(server_script), "--host", "0.0.0.0", "--port", server_port],
-                stdout=open(log_file, 'a'),
+                ["python3", str(config["script"]), "--host", "0.0.0.0", "--port", server_port],
+                stdout=open(config["log_file"], 'a'),
                 stderr=subprocess.STDOUT,
                 cwd=PROJECT_ROOT,
-                env=env  # Pass environment variables to subprocess
+                env=env
             )
 
             # Save PID
-            MAIL_QUERY_PID_FILE.write_text(str(process.pid))
-            logger.info(f"Started Mail Query MCP server with PID: {process.pid}")
+            pid_file.write_text(str(process.pid))
+            logger.info(f"Started {config['name']} MCP server with PID: {process.pid}")
 
-            return {"success": True, "pid": process.pid}
+            return {"success": True, "pid": process.pid, "server_type": server_type, "port": server_port}
         except Exception as e:
             logger.error(f"Error starting server: {e}")
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def stop_server() -> Dict:
-        """Stop Mail Query MCP server"""
-        try:
-            if not MAIL_QUERY_PID_FILE.exists():
-                return {"success": False, "error": "Server is not running"}
+    def stop_server(server_type: str = "mail_query") -> Dict:
+        """Stop MCP server
 
-            pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
+        Args:
+            server_type: Type of server to stop ("mail_query" or "onenote")
+        """
+        try:
+            if server_type not in MCP_SERVERS:
+                return {"success": False, "error": f"Unknown server type: {server_type}"}
+
+            config = MCP_SERVERS[server_type]
+            pid_file = config["pid_file"]
+
+            if not pid_file.exists():
+                return {"success": False, "error": f"{config['name']} server is not running"}
+
+            pid = int(pid_file.read_text().strip())
 
             # Kill process
             try:
@@ -150,9 +190,9 @@ class DashboardService:
                 if result.returncode == 0:
                     subprocess.run(["kill", "-9", str(pid)])
 
-                MAIL_QUERY_PID_FILE.unlink()
-                logger.info(f"Stopped Mail Query MCP server (PID: {pid})")
-                return {"success": True, "pid": pid}
+                pid_file.unlink()
+                logger.info(f"Stopped {config['name']} MCP server (PID: {pid})")
+                return {"success": True, "pid": pid, "server_type": server_type}
             except subprocess.CalledProcessError as e:
                 return {"success": False, "error": f"Failed to kill process: {e}"}
         except Exception as e:
@@ -268,52 +308,64 @@ class DashboardService:
 
     @staticmethod
     def get_server_status() -> Dict:
-        """Get Mail Query MCP server status"""
+        """Get all MCP servers status"""
         try:
-            # First check if server is responding on port 8001
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            result = sock.connect_ex(('localhost', 8001))
-            sock.close()
+            servers_status = {}
 
-            if result == 0:
-                # Server is running, try to get PID
-                pid = None
-                if MAIL_QUERY_PID_FILE.exists():
-                    try:
-                        pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
-                        # Verify PID is valid
-                        subprocess.run(["ps", "-p", str(pid)], check=True, capture_output=True)
-                    except:
-                        pid = None
+            for server_type, config in MCP_SERVERS.items():
+                port = int(os.getenv(config["env_port_var"], str(config["default_port"])))
+                pid_file = config["pid_file"]
 
-                return {
-                    "status": "running",
-                    "pid": pid if pid else "unknown",
-                    "endpoint": "http://localhost:8001"
-                }
+                # Check if server is responding on its port
+                import socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(('localhost', port))
+                sock.close()
 
-            # If not running on port, check PID file
-            if MAIL_QUERY_PID_FILE.exists():
-                pid = int(MAIL_QUERY_PID_FILE.read_text().strip())
-                # Check if process is running
-                result = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "comm="],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode == 0 and "python" in result.stdout:
-                    return {
-                        "status": "starting",
-                        "pid": pid,
-                        "endpoint": "http://localhost:8001"
+                if result == 0:
+                    # Server is running, try to get PID
+                    pid = None
+                    if pid_file.exists():
+                        try:
+                            pid = int(pid_file.read_text().strip())
+                            # Verify PID is valid
+                            subprocess.run(["ps", "-p", str(pid)], check=True, capture_output=True)
+                        except:
+                            pid = None
+
+                    servers_status[server_type] = {
+                        "status": "running",
+                        "pid": pid if pid else "unknown",
+                        "endpoint": f"http://localhost:{port}",
+                        "port": port
                     }
+                else:
+                    # If not running on port, check PID file
+                    if pid_file.exists():
+                        pid = int(pid_file.read_text().strip())
+                        # Check if process is running
+                        result = subprocess.run(
+                            ["ps", "-p", str(pid), "-o", "comm="],
+                            capture_output=True,
+                            text=True
+                        )
+                        if result.returncode == 0 and "python" in result.stdout:
+                            servers_status[server_type] = {
+                                "status": "starting",
+                                "pid": pid,
+                                "endpoint": f"http://localhost:{port}",
+                                "port": port
+                            }
+                        else:
+                            servers_status[server_type] = {"status": "stopped", "port": port}
+                    else:
+                        servers_status[server_type] = {"status": "stopped", "port": port}
 
-            return {"status": "stopped"}
+            return servers_status
         except Exception as e:
             logger.error(f"Error getting server status: {e}")
-            return {"status": "unknown", "error": str(e)}
+            return {"error": str(e)}
 
     @staticmethod
     def get_tunnel_status() -> Dict:
@@ -1460,13 +1512,23 @@ def create_dashboard_routes() -> List[Route]:
         </div>
 
         <div class="grid">
-            <!-- Server Status -->
+            <!-- Mail Query Server Status -->
             <div class="card">
                 <h2><span class="material-icons">email</span> Mail Query MCP Server</h2>
-                <div id="server-status">Loading...</div>
+                <div id="mail-query-server-status">Loading...</div>
                 <div style="margin-top: 15px; display: flex; gap: 10px;">
-                    <button class="btn btn-primary" onclick="startServer()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start Server</button>
-                    <button class="btn btn-danger" onclick="stopServer()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop Server</button>
+                    <button class="btn btn-primary" onclick="startServer('mail_query')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start</button>
+                    <button class="btn btn-danger" onclick="stopServer('mail_query')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop</button>
+                </div>
+            </div>
+
+            <!-- OneNote Server Status -->
+            <div class="card">
+                <h2><span class="material-icons">note</span> OneNote MCP Server</h2>
+                <div id="onenote-server-status">Loading...</div>
+                <div style="margin-top: 15px; display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="startServer('onenote')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start</button>
+                    <button class="btn btn-danger" onclick="stopServer('onenote')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop</button>
                 </div>
             </div>
 
@@ -1649,19 +1711,51 @@ def create_dashboard_routes() -> List[Route]:
                 const response = await fetch('/dashboard/api/status');
                 const data = await response.json();
 
-                const serverHtml = data.server.status === 'running' ? `
+                // Render Mail Query server status
+                const mailQueryServer = data.server.mail_query || {status: 'stopped'};
+                const mailQueryHtml = mailQueryServer.status === 'running' ? `
                     <span class="status-badge status-running">RUNNING</span>
                     <div class="info-row">
                         <span class="info-label">PID:</span>
-                        <span class="info-value">${data.server.pid}</span>
+                        <span class="info-value">${mailQueryServer.pid}</span>
                     </div>
                     <div class="info-row">
                         <span class="info-label">Endpoint:</span>
                         <span class="info-value">
-                            <a href="${data.server.endpoint}/health" target="_blank" class="url-copy">
-                                ${data.server.endpoint}
+                            <a href="${mailQueryServer.endpoint}/health" target="_blank" class="url-copy">
+                                ${mailQueryServer.endpoint}
                             </a>
                         </span>
+                    </div>
+                ` : mailQueryServer.status === 'starting' ? `
+                    <span class="status-badge" style="background: #f59e0b;">STARTING</span>
+                    <div class="info-row">
+                        <span class="info-label">PID:</span>
+                        <span class="info-value">${mailQueryServer.pid}</span>
+                    </div>
+                ` : `<span class="status-badge status-stopped">STOPPED</span>`;
+
+                // Render OneNote server status
+                const onenoteServer = data.server.onenote || {status: 'stopped'};
+                const onenoteHtml = onenoteServer.status === 'running' ? `
+                    <span class="status-badge status-running">RUNNING</span>
+                    <div class="info-row">
+                        <span class="info-label">PID:</span>
+                        <span class="info-value">${onenoteServer.pid}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Endpoint:</span>
+                        <span class="info-value">
+                            <a href="${onenoteServer.endpoint}/health" target="_blank" class="url-copy">
+                                ${onenoteServer.endpoint}
+                            </a>
+                        </span>
+                    </div>
+                ` : onenoteServer.status === 'starting' ? `
+                    <span class="status-badge" style="background: #f59e0b;">STARTING</span>
+                    <div class="info-row">
+                        <span class="info-label">PID:</span>
+                        <span class="info-value">${onenoteServer.pid}</span>
                     </div>
                 ` : `<span class="status-badge status-stopped">STOPPED</span>`;
 
@@ -1688,7 +1782,8 @@ def create_dashboard_routes() -> List[Route]:
                     ` : ''}
                 ` : `<span class="status-badge status-stopped">STOPPED</span>`;
 
-                document.getElementById('server-status').innerHTML = serverHtml;
+                document.getElementById('mail-query-server-status').innerHTML = mailQueryHtml;
+                document.getElementById('onenote-server-status').innerHTML = onenoteHtml;
                 document.getElementById('tunnel-status').innerHTML = tunnelHtml;
 
                 // Load endpoints with tunnel URL
@@ -1902,13 +1997,17 @@ def create_dashboard_routes() -> List[Route]:
         }
 
         // Start server
-        async function startServer() {
+        async function startServer(serverType) {
             try {
-                const response = await fetch('/dashboard/api/server/start', {method: 'POST'});
+                const response = await fetch('/dashboard/api/server/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({server_type: serverType})
+                });
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast('Server started successfully!');
+                    showToast(`${serverType === 'mail_query' ? 'Mail Query' : 'OneNote'} server started successfully!`);
                     setTimeout(() => loadServerStatus(), 2000);
                 } else {
                     showToast('Failed to start server: ' + data.error);
@@ -1920,15 +2019,19 @@ def create_dashboard_routes() -> List[Route]:
         }
 
         // Stop server
-        async function stopServer() {
-            if (!confirm('Are you sure you want to stop the server?')) return;
+        async function stopServer(serverType) {
+            if (!confirm(`Are you sure you want to stop the ${serverType === 'mail_query' ? 'Mail Query' : 'OneNote'} server?`)) return;
 
             try {
-                const response = await fetch('/dashboard/api/server/stop', {method: 'POST'});
+                const response = await fetch('/dashboard/api/server/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({server_type: serverType})
+                });
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast('Server stopped successfully!');
+                    showToast(`${serverType === 'mail_query' ? 'Mail Query' : 'OneNote'} server stopped successfully!`);
                     setTimeout(() => loadServerStatus(), 2000);
                 } else {
                     showToast('Failed to stop server: ' + data.error);
@@ -2398,14 +2501,24 @@ def create_dashboard_routes() -> List[Route]:
 
     # API: Start server
     async def api_start_server(request):
-        """Start Mail Query MCP server"""
-        result = service.start_server()
+        """Start MCP server"""
+        try:
+            body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
+            server_type = body.get('server_type', 'mail_query')
+            result = service.start_server(server_type=server_type)
+        except:
+            result = service.start_server()
         return JSONResponse(result)
 
     # API: Stop server
     async def api_stop_server(request):
-        """Stop Mail Query MCP server"""
-        result = service.stop_server()
+        """Stop MCP server"""
+        try:
+            body = await request.json() if request.headers.get('content-type') == 'application/json' else {}
+            server_type = body.get('server_type', 'mail_query')
+            result = service.stop_server(server_type=server_type)
+        except:
+            result = service.stop_server()
         return JSONResponse(result)
 
     # API: Start tunnel

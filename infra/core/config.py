@@ -100,16 +100,22 @@ class Config:
                 logger.info(f"OnRender 환경 감지: 데이터베이스 경로를 {default_path}로 설정")
                 path = default_path
         elif not path:
-            default_path = "./data/iacsgraph.db"
-            logger.warning(
-                f"\n{'='*60}\n"
-                f"⚠️  DATABASE_PATH 환경변수가 설정되지 않았습니다.\n"
-                f"    기본값을 사용합니다: {default_path}\n"
-                f"    .env 파일에 DATABASE_PATH를 설정하려면:\n"
-                f"    DATABASE_PATH=./data/your_database.db\n"
-                f"{'='*60}"
-            )
-            path = default_path
+            # 모듈별 DB 사용 시 경고 안 나오게 처리
+            if os.getenv("DATABASE_ONENOTE_PATH"):
+                path = os.getenv("DATABASE_ONENOTE_PATH")
+            elif os.getenv("DATABASE_MAIL_QUERY_PATH"):
+                path = os.getenv("DATABASE_MAIL_QUERY_PATH")
+            else:
+                default_path = "./data/iacsgraph.db"
+                logger.warning(
+                    f"\n{'='*60}\n"
+                    f"⚠️  DATABASE_PATH 환경변수가 설정되지 않았습니다.\n"
+                    f"    기본값을 사용합니다: {default_path}\n"
+                    f"    .env 파일에 DATABASE_PATH를 설정하려면:\n"
+                    f"    DATABASE_PATH=./data/your_database.db\n"
+                    f"{'='*60}"
+                )
+                path = default_path
 
         # 상대 경로를 절대 경로로 변환 (OnRender가 아닌 경우)
         if not Path(path).is_absolute() and not os.getenv("RENDER"):

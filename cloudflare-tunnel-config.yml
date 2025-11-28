@@ -8,7 +8,7 @@ credentials-file: /home/kimghw/.cloudflared/mailquery-mcp.json
 ingress:
   # Main application
   - hostname: mailquery-mcp.example.com
-    service: http://localhost:8000
+    service: http://localhost:8002
     originRequest:
       # Allow all headers
       noTLSVerify: true
@@ -24,7 +24,7 @@ ingress:
 
   # Health check endpoint
   - hostname: health.mailquery-mcp.example.com
-    service: http://localhost:8000
+    service: http://localhost:8002
     path: /health
 
   # Catch-all rule (required)
