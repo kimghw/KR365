@@ -56,3 +56,26 @@ CREATE INDEX IF NOT EXISTS idx_teams_chats_peer_name_lower
 
 CREATE INDEX IF NOT EXISTS idx_teams_chats_topic_lower
     ON teams_chats (user_id, is_active, LOWER(topic));
+
+-- accounts 테이블 (Teams 전용 DB 사용 시)
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
+    display_name TEXT,
+    azure_object_id TEXT,
+    oauth_tenant_id TEXT,
+    oauth_client_id TEXT,
+    oauth_redirect_uri TEXT,
+    oauth_client_secret TEXT,
+    delegated_permissions TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expiry DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- accounts 테이블 인덱스
+CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
+CREATE INDEX IF NOT EXISTS idx_accounts_azure_object_id ON accounts(azure_object_id);

@@ -88,6 +88,7 @@ class OneNoteDBService:
         """
         OneNote 통합 테이블 초기화
         - onenote_items: 섹션과 페이지를 하나의 테이블로 통합 관리
+        - accounts: 사용자 계정 정보 관리
         """
         try:
             # 통합 테이블 생성
@@ -107,6 +108,38 @@ class OneNoteDBService:
                 )
             """)
             logger.info("✅ onenote_items 통합 테이블 확인/생성 완료")
+
+            # accounts 테이블 생성 (graphapi.db와 동일한 스키마)
+            self.db.execute_query("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL UNIQUE,
+                    email TEXT UNIQUE,
+                    display_name TEXT,
+                    azure_object_id TEXT,
+                    oauth_tenant_id TEXT,
+                    oauth_client_id TEXT,
+                    oauth_redirect_uri TEXT,
+                    oauth_client_secret TEXT,
+                    delegated_permissions TEXT,
+                    access_token TEXT,
+                    refresh_token TEXT,
+                    token_expiry DATETIME,
+                    created_at DATETIME DEFAULT (datetime('now')),
+                    updated_at DATETIME DEFAULT (datetime('now'))
+                )
+            """)
+            logger.info("✅ accounts 테이블 확인/생성 완료")
+
+            # accounts 테이블 인덱스 생성
+            self.db.execute_query("""
+                CREATE INDEX IF NOT EXISTS idx_accounts_email
+                ON accounts(email)
+            """)
+            self.db.execute_query("""
+                CREATE INDEX IF NOT EXISTS idx_accounts_azure_object_id
+                ON accounts(azure_object_id)
+            """)
 
             # 인덱스 생성
             self.db.execute_query("""
@@ -551,3 +584,146 @@ class OneNoteDBService:
     def delete_page(self, user_id: str, page_id: str) -> bool:
         """하위 호환: 페이지 삭제"""
         return self.delete_item(user_id, page_id)
+
+    # ========================================================================
+    # Accounts 동기화 메서드
+    # ========================================================================
+
+    def sync_accounts_from_dcr(self):
+        """
+        auth_onenote.db의 dcr_azure_users 정보를 onenote.db의 accounts 테이블로 동기화
+
+        Returns:
+            동기화된 계정 수
+        """
+        try:
+            # auth_onenote.db 경로
+            auth_db_path = os.getenv("DCR_DATABASE_PATH",
+                                    str(Path(__file__).parent.parent.parent / "data" / "auth_onenote.db"))
+
+            if not Path(auth_db_path).exists():
+                logger.warning(f"⚠️ Auth DB not found: {auth_db_path}")
+                return 0
+
+            # auth_onenote.db 연결
+            auth_conn = sqlite3.connect(auth_db_path)
+            auth_conn.row_factory = sqlite3.Row
+            auth_cursor = auth_conn.cursor()
+
+            # dcr_azure_users와 dcr_azure_app 조인해서 정보 가져오기
+            auth_cursor.execute('''
+                SELECT
+                    dau.object_id,
+                    dau.user_email,
+                    dau.user_name,
+                    dau.access_token,
+                    dau.refresh_token,
+                    dau.expires_at,
+                    dau.scope,
+                    dau.application_id,
+                    daa.client_secret,
+                    daa.tenant_id,
+                    daa.redirect_uri
+                FROM dcr_azure_users dau
+                LEFT JOIN dcr_azure_app daa ON dau.application_id = daa.application_id
+                WHERE dau.user_email IS NOT NULL
+            ''')
+
+            users = auth_cursor.fetchall()
+            logger.info(f"📋 Found {len(users)} users in auth_onenote.db")
+
+            synced_count = 0
+
+            for user in users:
+                try:
+                    user_email = user['user_email']
+                    # user_id는 이메일의 @ 앞부분 사용
+                    user_id = user_email.split('@')[0] if '@' in user_email else user_email
+
+                    # OneNote 권한 기본값
+                    delegated_permissions = user['scope'] or 'User.Read offline_access Notes.Read Notes.ReadWrite'
+
+                    # UPSERT: 있으면 업데이트, 없으면 삽입
+                    self.db.execute_query('''
+                        INSERT INTO accounts (
+                            user_id, email, display_name, azure_object_id,
+                            oauth_tenant_id, oauth_client_id, oauth_redirect_uri,
+                            oauth_client_secret, delegated_permissions,
+                            access_token, refresh_token, token_expiry
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(user_id) DO UPDATE SET
+                            email = excluded.email,
+                            display_name = COALESCE(excluded.display_name, display_name),
+                            azure_object_id = excluded.azure_object_id,
+                            oauth_tenant_id = excluded.oauth_tenant_id,
+                            oauth_client_id = excluded.oauth_client_id,
+                            oauth_redirect_uri = excluded.oauth_redirect_uri,
+                            oauth_client_secret = excluded.oauth_client_secret,
+                            delegated_permissions = excluded.delegated_permissions,
+                            access_token = excluded.access_token,
+                            refresh_token = excluded.refresh_token,
+                            token_expiry = excluded.token_expiry,
+                            updated_at = datetime('now')
+                    ''', (
+                        user_id,
+                        user_email,
+                        user['user_name'] or user_id,
+                        user['object_id'],
+                        user['tenant_id'] or os.getenv('DCR_AZURE_TENANT_ID', 'common'),
+                        user['application_id'],
+                        user['redirect_uri'] or f'https://onenote.{os.getenv("DCR_OAUTH_ENDPOINT", "kimghw.org").replace("https://", "")}/oauth/callback',
+                        user['client_secret'],  # Already encrypted in auth DB
+                        delegated_permissions,
+                        user['access_token'],  # Already encrypted
+                        user['refresh_token'],  # Already encrypted
+                        user['expires_at']
+                    ))
+
+                    logger.info(f"✅ Synced account: {user_email}")
+                    synced_count += 1
+
+                except Exception as e:
+                    logger.error(f"❌ Failed to sync user {user.get('user_email')}: {str(e)}")
+                    continue
+
+            auth_conn.close()
+            logger.info(f"✅ Sync complete: {synced_count} accounts synced to onenote.db")
+            return synced_count
+
+        except Exception as e:
+            logger.error(f"❌ Sync failed: {str(e)}")
+            return 0
+
+    def get_account(self, user_id: str = None, email: str = None) -> Optional[Dict]:
+        """
+        accounts 테이블에서 계정 정보 조회
+
+        Args:
+            user_id: 사용자 ID
+            email: 이메일 주소
+
+        Returns:
+            계정 정보 dict 또는 None
+        """
+        try:
+            if user_id:
+                result = self.db.fetch_one(
+                    "SELECT * FROM accounts WHERE user_id = ?",
+                    (user_id,)
+                )
+            elif email:
+                result = self.db.fetch_one(
+                    "SELECT * FROM accounts WHERE email = ?",
+                    (email,)
+                )
+            else:
+                # 아무 조건 없으면 첫 번째 계정 반환
+                result = self.db.fetch_one(
+                    "SELECT * FROM accounts ORDER BY updated_at DESC LIMIT 1"
+                )
+
+            return dict(result) if result else None
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get account: {str(e)}")
+            return None

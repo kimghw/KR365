@@ -1101,6 +1101,18 @@ class DCRService:
                 azure_expires_at=azure_expires_at,
             )
 
+            # 각 서비스별 DB에도 동기화 (module_name 기반)
+            if self.module_name in ['onenote', 'teams']:
+                self._sync_service_accounts(
+                    service_name=self.module_name,
+                    azure_object_id=azure_object_id,
+                    user_email=user_email,
+                    user_name=user_name,
+                    encrypted_access_token=encrypted_access,
+                    encrypted_refresh_token=encrypted_refresh,
+                    azure_expires_at=azure_expires_at,
+                )
+
         # 2) 기존 active Bearer 토큰 확인 및 업데이트
         check_bearer_query = f"""
         SELECT COUNT(*) FROM {self._get_table_name('dcr_tokens')}
@@ -1340,7 +1352,7 @@ class DCRService:
         }
 
     def update_auth_code_with_object_id(self, auth_code: str, azure_object_id: str, user_email: str = None, display_name: str = None):
-        """Authorization code에 Azure Object ID 연결
+        """Authorization code에 Azure Object ID 연결 및 dcr_azure_users 업데이트
 
         Args:
             auth_code: Authorization code
@@ -1349,19 +1361,56 @@ class DCRService:
             display_name: 사용자 표시 이름 (선택)
 
         Note:
-            dcr_tokens의 azure_object_id는 FOREIGN KEY로 dcr_azure_users를 참조하지만,
-            dcr_azure_users는 토큰 정보 테이블이므로 여기서는 NULL로 설정합니다.
-            실제 사용자-토큰 연결은 token exchange 시점에 이루어집니다.
+            OAuth 콜백 시점에서 사용자 정보를 받았을 때 즉시 dcr_azure_users를 업데이트합니다.
+            이렇게 하면 토큰 교환 전에도 사용자 정보가 준비되어 있습니다.
         """
-        # dcr_tokens에 azure_object_id를 NULL로 설정 (FOREIGN KEY constraint 회피)
-        # 실제 사용자 정보는 토큰 교환 후 dcr_azure_users에 저장됨
+        # 1. dcr_azure_users에 사용자 정보 저장/업데이트 (토큰 없이 기본 정보만)
+        if azure_object_id and user_email:
+            # 기본 사용자 정보만 저장 (토큰은 나중에 store_tokens에서 업데이트)
+            azure_user_query = """
+            INSERT INTO dcr_azure_users (
+                object_id, application_id, user_email, user_name,
+                access_token, refresh_token, expires_at, scope, updated_at
+            ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+            ON CONFLICT(object_id) DO UPDATE SET
+                user_email = COALESCE(excluded.user_email, user_email),
+                user_name = COALESCE(excluded.user_name, user_name),
+                application_id = excluded.application_id,
+                updated_at = CURRENT_TIMESTAMP
+            """
+
+            try:
+                self._execute_query(
+                    azure_user_query,
+                    (
+                        azure_object_id,
+                        self.azure_application_id,
+                        user_email,
+                        display_name,
+                    ),
+                )
+                logger.info(f"✅ Updated dcr_azure_users for object_id: {azure_object_id}, email: {user_email}")
+
+                # 2. accounts 테이블과 동기화 (토큰 없이 기본 정보만)
+                # 이 시점에서는 토큰이 없으므로 기본 계정 정보만 생성/업데이트
+                self._sync_user_info_to_accounts(
+                    azure_object_id=azure_object_id,
+                    user_email=user_email,
+                    user_name=display_name
+                )
+
+            except Exception as e:
+                logger.error(f"❌ Failed to update dcr_azure_users: {str(e)}")
+
+        # 3. dcr_tokens에 azure_object_id를 NULL로 설정 (FOREIGN KEY constraint 회피)
+        # 실제 연결은 token exchange 시점에 이루어짐
         query = f"""
         UPDATE {self._get_table_name('dcr_tokens')}
         SET azure_object_id = NULL
         WHERE dcr_token_value = ? AND dcr_token_type = 'authorization_code'
         """
         self._execute_query(query, (auth_code,))
-        logger.info(f"✅ Updated auth code {auth_code[:10]}... (azure_object_id will be set during token exchange)")
+        logger.info(f"✅ Updated auth code {auth_code[:10]}... with user info")
 
     def is_user_allowed(self, user_email: str) -> bool:
         f"""사용자 허용 여부 확인 (도메인 기반)"""
@@ -1388,6 +1437,87 @@ class DCRService:
             )
 
         return is_allowed
+
+    def _sync_user_info_to_accounts(
+        self,
+        azure_object_id: str,
+        user_email: Optional[str],
+        user_name: Optional[str],
+    ):
+        """OAuth 콜백 시점에서 사용자 기본 정보만 accounts 테이블에 동기화 (토큰 없이)"""
+        try:
+            # 이메일 필수 확인
+            if not user_email:
+                logger.warning(f"User email missing, cannot sync to accounts table")
+                return
+
+            # graphapi.db 연결
+            from infra.core.db_manager import get_database_manager
+            db_manager = get_database_manager()
+
+            # user_id는 이메일의 로컬 파트 사용
+            auto_user_id = user_email.split("@")[0] if "@" in user_email else user_email
+
+            # user_id로 계정 조회
+            existing = db_manager.fetch_one(
+                "SELECT id, user_id, email FROM accounts WHERE user_id = ? OR email = ?",
+                (auto_user_id, user_email),
+            )
+
+            if not existing:
+                # 계정이 없으면 기본 정보만으로 생성
+                logger.info(
+                    f"🆕 Creating new account with basic info for user_id: {auto_user_id}, email: {user_email}"
+                )
+
+                # OAuth 정보: DCR 설정 사용
+                oauth_client_id = self.azure_application_id
+                oauth_tenant_id = self.azure_tenant_id
+                oauth_redirect_uri = self.azure_redirect_uri
+                oauth_client_secret = self.azure_client_secret
+
+                # 기본 scope 사용 (토큰이 없으므로 환경변수 기본값 사용)
+                delegated_permissions = os.getenv(
+                    "OAUTH_DELEGATED_PERMISSIONS",
+                    "User.Read offline_access Mail.Read Mail.ReadWrite Mail.Send"
+                )
+
+                # 계정 생성 (토큰 없이)
+                db_manager.execute_query(
+                    """INSERT INTO accounts (
+                        user_id, email, display_name, azure_object_id,
+                        oauth_tenant_id, oauth_client_id,
+                        oauth_redirect_uri, oauth_client_secret, delegated_permissions,
+                        access_token, refresh_token, token_expiry,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                    (
+                        auto_user_id,
+                        user_email,
+                        user_name or auto_user_id,
+                        azure_object_id,
+                        oauth_tenant_id,
+                        oauth_client_id,
+                        oauth_redirect_uri,
+                        self.crypto.account_encrypt_sensitive_data(oauth_client_secret) if oauth_client_secret else None,
+                        delegated_permissions,
+                    ),
+                )
+                logger.info(f"✅ Created account in accounts table for {user_email} (tokens will be added later)")
+            else:
+                # 계정이 있으면 기본 정보만 업데이트
+                db_manager.execute_query(
+                    """UPDATE accounts SET
+                        azure_object_id = ?,
+                        display_name = COALESCE(?, display_name),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ? OR email = ?""",
+                    (azure_object_id, user_name, auto_user_id, user_email),
+                )
+                logger.info(f"✅ Updated basic info in accounts table for {user_email}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to sync user info to accounts table: {str(e)}")
 
     def _sync_with_accounts_table(
         self,
@@ -1448,17 +1578,18 @@ class DCRService:
                 db_manager.execute_query(
                     """
                     INSERT INTO accounts (
-                        user_id, user_name, email,
+                        user_id, user_name, email, azure_object_id,
                         oauth_client_id, oauth_client_secret, oauth_tenant_id, oauth_redirect_uri,
                         delegated_permissions, auth_type,
                         access_token, refresh_token, token_expiry,
                         status, is_active, created_at, updated_at, last_used_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Authorization Code Flow', ?, ?, ?, 'ACTIVE', 1, datetime('now'), datetime('now'), datetime('now'))
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Authorization Code Flow', ?, ?, ?, 'ACTIVE', 1, datetime('now'), datetime('now'), datetime('now'))
                 """,
                     (
                         auto_user_id,
                         user_name or auto_user_id,
                         user_email,
+                        azure_object_id,  # Azure Object ID 추가
                         oauth_client_id,
                         self.crypto.account_encrypt_sensitive_data(oauth_client_secret),
                         oauth_tenant_id,
@@ -1478,11 +1609,13 @@ class DCRService:
                 db_manager.execute_query(
                     """
                     UPDATE accounts
-                    SET access_token = ?, refresh_token = ?, token_expiry = ?,
+                    SET azure_object_id = COALESCE(?, azure_object_id),
+                        access_token = ?, refresh_token = ?, token_expiry = ?,
                         status = 'ACTIVE', last_used_at = datetime('now'), updated_at = datetime('now')
                     WHERE user_id = ?
                 """,
                     (
+                        azure_object_id,  # Azure Object ID 추가/업데이트
                         encrypted_access_token,  # 이미 암호화됨
                         encrypted_refresh_token,  # 이미 암호화됨
                         azure_expires_at.isoformat() if azure_expires_at else None,
@@ -1596,6 +1729,112 @@ class DCRService:
             logger.error(f"Failed to sync with mail_query accounts table: {e}")
             import traceback
             traceback.print_exc()
+
+    def _sync_service_accounts(
+        self,
+        service_name: str,
+        azure_object_id: str,
+        user_email: str,
+        user_name: Optional[str],
+        encrypted_access_token: str,
+        encrypted_refresh_token: Optional[str],
+        azure_expires_at: datetime,
+    ):
+        """특정 서비스의 accounts 테이블과 동기화 (onenote.db, teams.db 등)"""
+        try:
+            import sqlite3
+            from pathlib import Path
+
+            # 서비스별 DB 경로 설정
+            db_paths = {
+                'onenote': 'data/onenote.db',
+                'teams': 'data/teams.db',
+            }
+
+            if service_name not in db_paths:
+                return  # 지원하지 않는 서비스
+
+            # DB 경로
+            db_path = Path(__file__).parent.parent.parent / db_paths[service_name]
+
+            if not db_path.exists():
+                logger.warning(f"⚠️ {service_name}.db not found: {db_path}")
+                return
+
+            # DB 연결
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # user_id는 이메일의 로컬 파트 사용
+            auto_user_id = user_email.split("@")[0] if "@" in user_email else user_email
+
+            # 기존 계정 조회
+            cursor.execute(
+                "SELECT id, user_id, email FROM accounts WHERE user_id = ? OR email = ?",
+                (auto_user_id, user_email)
+            )
+            existing = cursor.fetchone()
+
+            if not existing:
+                # 계정 생성
+                logger.info(f"🆕 Creating account in {service_name}.db for: {user_email}")
+
+                # 서비스별 기본 권한 설정
+                default_scopes = {
+                    'onenote': 'User.Read offline_access Notes.Read Notes.ReadWrite',
+                    'teams': 'User.Read offline_access Team.ReadBasic.All Channel.ReadBasic.All Chat.Read'
+                }
+
+                delegated_permissions = default_scopes.get(service_name, 'User.Read offline_access')
+
+                cursor.execute('''
+                    INSERT INTO accounts (
+                        user_id, email, display_name, azure_object_id,
+                        oauth_tenant_id, oauth_client_id, oauth_redirect_uri,
+                        oauth_client_secret, delegated_permissions,
+                        access_token, refresh_token, token_expiry
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    auto_user_id,
+                    user_email,
+                    user_name or auto_user_id,
+                    azure_object_id,
+                    self.azure_tenant_id,
+                    self.azure_application_id,
+                    self.azure_redirect_uri,
+                    self.crypto.account_encrypt_sensitive_data(self.azure_client_secret) if self.azure_client_secret else None,
+                    delegated_permissions,
+                    encrypted_access_token,  # 이미 암호화됨
+                    encrypted_refresh_token,  # 이미 암호화됨
+                    azure_expires_at.isoformat() if azure_expires_at else None
+                ))
+                logger.info(f"✅ Created account in {service_name}.db")
+            else:
+                # 계정 업데이트
+                cursor.execute('''
+                    UPDATE accounts
+                    SET azure_object_id = COALESCE(?, azure_object_id),
+                        access_token = ?, refresh_token = ?, token_expiry = ?,
+                        display_name = COALESCE(?, display_name),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ? OR email = ?
+                ''', (
+                    azure_object_id,
+                    encrypted_access_token,
+                    encrypted_refresh_token,
+                    azure_expires_at.isoformat() if azure_expires_at else None,
+                    user_name,
+                    auto_user_id,
+                    user_email
+                ))
+                logger.info(f"✅ Updated account in {service_name}.db")
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            logger.error(f"Failed to sync with {service_name}.db: {e}")
             # 실패해도 DCR 인증은 계속 진행
 
     # PKCE Helper Methods

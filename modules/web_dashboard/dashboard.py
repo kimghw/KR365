@@ -46,7 +46,7 @@ MCP_SERVERS = {
         "log_file": LOG_DIR / "mail_query_fastapi.log",
         "default_port": 8001,
         "env_port_var": "MAIL_API_PORT",
-        "auth_db": PROJECT_ROOT / "data" / "auth_mail_query.db",
+        "auth_db": PROJECT_ROOT / "data" / "auth_outlook.db",
         "data_db": PROJECT_ROOT / "data" / "mail_query.db",
     },
     "onenote": {
@@ -1874,9 +1874,9 @@ def create_dashboard_routes() -> List[Route]:
         </div>
 
         <div class="grid">
-            <!-- Mail Query Server Status -->
+            <!-- Outlook MCP Server Status -->
             <div class="card">
-                <h2><span class="material-icons">email</span> Mail Query MCP Server</h2>
+                <h2><span class="material-icons">email</span> Outlook MCP Server</h2>
                 <div id="mail-query-server-status">Loading...</div>
                 <div style="margin-top: 15px; display: flex; gap: 10px;">
                     <button class="btn btn-primary" onclick="startServer('mail_query')" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start</button>
@@ -2095,7 +2095,7 @@ def create_dashboard_routes() -> List[Route]:
                     <div class="info-row">
                         <span class="info-label">Auth DB:</span>
                         <span class="info-value" style="font-size: 0.9em; color: ${mailQueryServer.auth_db.exists ? '#10b981' : '#f59e0b'};">
-                            ${mailQueryServer.auth_db.exists ? '✅ auth_mail_query.db' : '⚠️ Not created yet'}
+                            ${mailQueryServer.auth_db.exists ? '✅ auth_outlook.db' : '⚠️ Not created yet'}
                         </span>
                     </div>
                     ` : ''}

@@ -41,6 +41,16 @@ class FastAPIOneNoteServer:
         self.db = OneNoteDBService()
         self.db.initialize_tables()
 
+        # auth_onenote.db에서 accounts 동기화
+        try:
+            synced = self.db.sync_accounts_from_dcr()
+            if synced > 0:
+                logger.info(f"✅ Synced {synced} accounts from auth_onenote.db")
+            else:
+                logger.info("📋 No accounts to sync from auth_onenote.db")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to sync accounts from DCR: {str(e)}")
+
         # MCP Handlers
         self.handlers = OneNoteHandlers()
 
