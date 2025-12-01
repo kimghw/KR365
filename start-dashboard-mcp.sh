@@ -15,7 +15,7 @@ case "$SERVER_TYPE" in
         FASTAPI_LOG_FILE="logs/mail_query_fastapi.log"
         FASTAPI_PORT=${MAIL_API_PORT:-8001}
         FASTAPI_SCRIPT="modules/outlook_mcp/entrypoints/run_fastapi.py"
-        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_mail_query.db"
+        # DCR_DATABASE_PATH 제거 - 서버별로 자동 생성됨 (auth_mail_query.db)
         export DATABASE_MAIL_QUERY_PATH="${SCRIPT_DIR}/data/mail_query.db"
         SERVER_DISPLAY_NAME="Mail Query"
         ;;
@@ -24,7 +24,7 @@ case "$SERVER_TYPE" in
         FASTAPI_LOG_FILE="logs/onenote_fastapi.log"
         FASTAPI_PORT=${ONENOTE_SERVER_PORT:-8002}
         FASTAPI_SCRIPT="modules/onenote_mcp/entrypoints/run_fastapi.py"
-        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_onenote.db"
+        # DCR_DATABASE_PATH 제거 - 서버별로 자동 생성됨 (auth_onenote.db)
         export DATABASE_ONENOTE_PATH="${SCRIPT_DIR}/data/onenote.db"
         SERVER_DISPLAY_NAME="OneNote"
         ;;
@@ -33,7 +33,7 @@ case "$SERVER_TYPE" in
         FASTAPI_LOG_FILE="logs/teams_fastapi.log"
         FASTAPI_PORT=${TEAMS_API_PORT:-8003}
         FASTAPI_SCRIPT="modules/teams_mcp/entrypoints/run_fastapi.py"
-        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_teams.db"
+        # DCR_DATABASE_PATH 제거 - 서버별로 자동 생성됨 (auth_teams.db)
         export DATABASE_TEAMS_PATH="${SCRIPT_DIR}/data/teams.db"
         SERVER_DISPLAY_NAME="Teams"
         ;;

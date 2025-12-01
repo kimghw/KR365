@@ -45,7 +45,7 @@ class DCRService:
         self.server_name = server_name
         self.module_name = module_name or server_name  # 모듈 이름 (테이블 접미사로 사용)
 
-        # DB 경로 설정: 환경변수 > auth_{server_name}.db
+        # DB 경로 설정: 환경변수 > auth_{module_name}.db
         from pathlib import Path
 
         db_path_env = os.getenv("DCR_DATABASE_PATH")
@@ -53,8 +53,10 @@ class DCRService:
             self.db_path = db_path_env
         else:
             # 상대 경로를 절대 경로로 변환
+            # module_name이 있으면 그것을 사용, 없으면 server_name 사용
+            db_name = self.module_name if self.module_name else self.server_name
             project_root = Path(__file__).parent.parent.parent
-            self.db_path = str(project_root / f"data/auth_{server_name}.db")
+            self.db_path = str(project_root / f"data/auth_{db_name}.db")
             logger.info(f"📁 DB path set to: {self.db_path}")
 
         logger.info(f"📦 Module name: {self.module_name} (tables will use suffix: _{self.module_name})")

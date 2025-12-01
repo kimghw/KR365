@@ -46,6 +46,8 @@ MCP_SERVERS = {
         "log_file": LOG_DIR / "mail_query_fastapi.log",
         "default_port": 8001,
         "env_port_var": "MAIL_API_PORT",
+        "auth_db": PROJECT_ROOT / "data" / "auth_mail_query.db",
+        "data_db": PROJECT_ROOT / "data" / "mail_query.db",
     },
     "onenote": {
         "name": "OneNote",
@@ -59,6 +61,8 @@ MCP_SERVERS = {
         "log_file": LOG_DIR / "onenote_fastapi.log",
         "default_port": 8002,
         "env_port_var": "ONENOTE_SERVER_PORT",
+        "auth_db": PROJECT_ROOT / "data" / "auth_onenote.db",
+        "data_db": PROJECT_ROOT / "data" / "onenote.db",
     },
     "teams": {
         "name": "Teams",
@@ -72,6 +76,8 @@ MCP_SERVERS = {
         "log_file": LOG_DIR / "teams_fastapi.log",
         "default_port": 8003,
         "env_port_var": "TEAMS_API_PORT",
+        "auth_db": PROJECT_ROOT / "data" / "auth_teams.db",
+        "data_db": PROJECT_ROOT / "data" / "teams.db",
     },
 }
 
@@ -206,6 +212,40 @@ class DashboardService:
         except Exception as e:
             logger.error(f"Error starting server: {e}")
             return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def start_all_servers() -> Dict:
+        """Start all MCP servers"""
+        results = {}
+        for server_type in MCP_SERVERS.keys():
+            results[server_type] = DashboardService.start_server(server_type)
+
+        # Count successes and failures
+        success_count = sum(1 for r in results.values() if r.get("success"))
+        failed_count = len(results) - success_count
+
+        return {
+            "success": failed_count == 0,
+            "results": results,
+            "summary": f"Started {success_count} servers, {failed_count} failed"
+        }
+
+    @staticmethod
+    def stop_all_servers() -> Dict:
+        """Stop all MCP servers"""
+        results = {}
+        for server_type in MCP_SERVERS.keys():
+            results[server_type] = DashboardService.stop_server(server_type)
+
+        # Count successes and failures
+        success_count = sum(1 for r in results.values() if r.get("success"))
+        failed_count = len(results) - success_count
+
+        return {
+            "success": failed_count == 0,
+            "results": results,
+            "summary": f"Stopped {success_count} servers, {failed_count} failed"
+        }
 
     @staticmethod
     def stop_server(server_type: str = "mail_query") -> Dict:
@@ -417,11 +457,27 @@ class DashboardService:
                         except:
                             pid = None
 
+                    # Check if auth DB exists and get its size
+                    auth_db_info = None
+                    if "auth_db" in config and config["auth_db"].exists():
+                        auth_db_size = config["auth_db"].stat().st_size
+                        auth_db_info = {
+                            "path": str(config["auth_db"]),
+                            "size": auth_db_size,
+                            "exists": True
+                        }
+                    else:
+                        auth_db_info = {
+                            "path": str(config.get("auth_db", f"data/auth_{server_type}.db")),
+                            "exists": False
+                        }
+
                     servers_status[server_type] = {
                         "status": "running",
                         "pid": pid if pid else "unknown",
                         "endpoint": f"http://localhost:{port}",
                         "port": port,
+                        "auth_db": auth_db_info,
                     }
                 else:
                     # If not running on port, check PID file
@@ -434,21 +490,69 @@ class DashboardService:
                             text=True,
                         )
                         if result.returncode == 0 and "python" in result.stdout:
+                            # Check if auth DB exists
+                            auth_db_info = None
+                            if "auth_db" in config and config["auth_db"].exists():
+                                auth_db_size = config["auth_db"].stat().st_size
+                                auth_db_info = {
+                                    "path": str(config["auth_db"]),
+                                    "size": auth_db_size,
+                                    "exists": True
+                                }
+                            else:
+                                auth_db_info = {
+                                    "path": str(config.get("auth_db", f"data/auth_{server_type}.db")),
+                                    "exists": False
+                                }
+
                             servers_status[server_type] = {
                                 "status": "starting",
                                 "pid": pid,
                                 "endpoint": f"http://localhost:{port}",
                                 "port": port,
+                                "auth_db": auth_db_info,
                             }
                         else:
+                            # Check if auth DB exists even when stopped
+                            auth_db_info = None
+                            if "auth_db" in config and config["auth_db"].exists():
+                                auth_db_size = config["auth_db"].stat().st_size
+                                auth_db_info = {
+                                    "path": str(config["auth_db"]),
+                                    "size": auth_db_size,
+                                    "exists": True
+                                }
+                            else:
+                                auth_db_info = {
+                                    "path": str(config.get("auth_db", f"data/auth_{server_type}.db")),
+                                    "exists": False
+                                }
+
                             servers_status[server_type] = {
                                 "status": "stopped",
                                 "port": port,
+                                "auth_db": auth_db_info,
                             }
                     else:
+                        # Check if auth DB exists even when stopped
+                        auth_db_info = None
+                        if "auth_db" in config and config["auth_db"].exists():
+                            auth_db_size = config["auth_db"].stat().st_size
+                            auth_db_info = {
+                                "path": str(config["auth_db"]),
+                                "size": auth_db_size,
+                                "exists": True
+                            }
+                        else:
+                            auth_db_info = {
+                                "path": str(config.get("auth_db", f"data/auth_{server_type}.db")),
+                                "exists": False
+                            }
+
                         servers_status[server_type] = {
                             "status": "stopped",
                             "port": port,
+                            "auth_db": auth_db_info,
                         }
 
             return servers_status
@@ -458,100 +562,203 @@ class DashboardService:
 
     @staticmethod
     def get_tunnel_status() -> Dict:
-        """Get Cloudflare tunnel status"""
+        """Get Cloudflare tunnel status (both quick tunnel and fixed domain tunnel)"""
         try:
-            tunnel_url = None
-            pid = None
+            import re
 
-            # Check PID file
+            # Initialize result
+            result = {
+                "quick_tunnel": None,
+                "fixed_domain_tunnel": None
+            }
+
+            # 1. Check Quick Tunnel Status
+            quick_tunnel_pid = None
+            quick_tunnel_url = None
+            quick_tunnel_port = None
+
+            # Check PID file for quick tunnel
             if QUICK_TUNNEL_PID_FILE.exists():
-                pid = int(QUICK_TUNNEL_PID_FILE.read_text().strip())
-                result = subprocess.run(["ps", "-p", str(pid)], capture_output=True)
-                if result.returncode != 0:
-                    pid = None
+                quick_tunnel_pid = int(QUICK_TUNNEL_PID_FILE.read_text().strip())
+                ps_result = subprocess.run(["ps", "-p", str(quick_tunnel_pid)], capture_output=True)
+                if ps_result.returncode != 0:
+                    quick_tunnel_pid = None
 
             # If no PID, try to find cloudflared process
-            if not pid:
-                result = subprocess.run(
+            if not quick_tunnel_pid:
+                pgrep_result = subprocess.run(
                     ["pgrep", "-f", "cloudflared.*tunnel.*--url"],
                     capture_output=True,
                     text=True,
                 )
-                if result.returncode == 0 and result.stdout.strip():
-                    pid = int(result.stdout.strip().split()[0])
+                if pgrep_result.returncode == 0 and pgrep_result.stdout.strip():
+                    quick_tunnel_pid = int(pgrep_result.stdout.strip().split()[0])
 
-            if pid:
+            if quick_tunnel_pid:
                 # Try to extract port from process info
-                tunnel_port = None
                 try:
                     ps_result = subprocess.run(
-                        ["ps", "-p", str(pid), "-o", "args="],
+                        ["ps", "-p", str(quick_tunnel_pid), "-o", "args="],
                         capture_output=True,
                         text=True,
                     )
                     if ps_result.returncode == 0:
-                        # Extract port from command like: cloudflared tunnel --url http://localhost:8001
-                        import re
-
                         port_match = re.search(
                             r"--url\s+https?://localhost:(\d+)", ps_result.stdout
                         )
                         if port_match:
-                            tunnel_port = int(port_match.group(1))
+                            quick_tunnel_port = int(port_match.group(1))
                 except:
                     pass
 
-                # Method 1: Try to get URL from log file
+                # Try to get URL from log file
                 log_file = LOG_DIR / "quick_tunnel.log"
                 if log_file.exists():
                     log_content = log_file.read_text()
-                    import re
-
                     match = re.search(
                         r"https://[a-z0-9-]+\.trycloudflare\.com", log_content
                     )
                     if match:
-                        tunnel_url = match.group(0)
+                        quick_tunnel_url = match.group(0)
 
-                # Method 2: Try to get URL from .env file (DCR_OAUTH_REDIRECT_URI)
-                if not tunnel_url and ENV_FILE.exists():
-                    env_content = ENV_FILE.read_text()
-                    import re
-
-                    # Look for DCR_OAUTH_REDIRECT_URI or AUTO_REGISTER_OAUTH_REDIRECT_URI
-                    match = re.search(
-                        r"(?:DCR_OAUTH_REDIRECT_URI|AUTO_REGISTER_OAUTH_REDIRECT_URI)=(https://[a-z0-9-]+\.trycloudflare\.com)",
-                        env_content,
-                    )
-                    if match:
-                        tunnel_url = match.group(1)
-
-                # Method 3: Try to get URL using cloudflared metrics (if available)
-                if not tunnel_url:
-                    try:
-                        # cloudflared exposes metrics on localhost:60123 by default
-                        import requests
-
-                        response = requests.get(
-                            "http://127.0.0.1:60123/metrics", timeout=1
-                        )
-                        if response.status_code == 200:
-                            match = re.search(
-                                r"https://[a-z0-9-]+\.trycloudflare\.com", response.text
-                            )
-                            if match:
-                                tunnel_url = match.group(0)
-                    except:
-                        pass
-
-                return {
+                result["quick_tunnel"] = {
                     "status": "running",
-                    "pid": pid,
-                    "port": tunnel_port if tunnel_port else "unknown",
-                    "url": tunnel_url,
+                    "pid": quick_tunnel_pid,
+                    "port": quick_tunnel_port if quick_tunnel_port else "unknown",
+                    "url": quick_tunnel_url
+                }
+            else:
+                result["quick_tunnel"] = {"status": "stopped"}
+
+            # 2. Check Fixed Domain Tunnel Status (systemd service)
+            try:
+                # Check cloudflared systemd service status
+                systemctl_result = subprocess.run(
+                    ["systemctl", "status", "cloudflared", "--no-pager"],
+                    capture_output=True,
+                    text=True
+                )
+
+                service_info = {
+                    "status": "unknown",
+                    "type": "fixed_domain",
+                    "domains": []
                 }
 
-            return {"status": "stopped"}
+                if systemctl_result.returncode == 0:
+                    output = systemctl_result.stdout
+
+                    # Parse service status
+                    if "Active: active (running)" in output:
+                        service_info["status"] = "running"
+
+                        # Extract PID
+                        pid_match = re.search(r"Main PID: (\d+)", output)
+                        if pid_match:
+                            service_info["pid"] = int(pid_match.group(1))
+
+                        # Extract memory usage
+                        mem_match = re.search(r"Memory: ([\d.]+[MKG])", output)
+                        if mem_match:
+                            service_info["memory"] = mem_match.group(1)
+
+                        # Extract CPU time
+                        cpu_match = re.search(r"CPU: ([\d.]+\w+)", output)
+                        if cpu_match:
+                            service_info["cpu_time"] = cpu_match.group(1)
+
+                        # Parse config to find tunnel domains
+                        try:
+                            # Check if there's a config file
+                            config_file = Path("/home/kimghw/.cloudflared/config.yml")
+                            if config_file.exists():
+                                import yaml
+                                with open(config_file, 'r') as f:
+                                    config = yaml.safe_load(f)
+                                    if config and 'ingress' in config:
+                                        for rule in config['ingress']:
+                                            if 'hostname' in rule:
+                                                service_info["domains"].append({
+                                                    "hostname": rule['hostname'],
+                                                    "service": rule.get('service', 'unknown')
+                                                })
+                        except:
+                            pass
+
+                        # If no config file, try to extract from command line
+                        if not service_info["domains"]:
+                            # Look for ingress rules in the process command
+                            if "--hostname" in output:
+                                hostname_matches = re.findall(r"--hostname\s+(\S+)", output)
+                                for hostname in hostname_matches:
+                                    service_info["domains"].append({
+                                        "hostname": hostname,
+                                        "service": "configured"
+                                    })
+
+                        # Check known domains
+                        known_domains = ["outlook.kimghw.org", "onenote.kimghw.org", "teams.kimghw.org"]
+                        for domain in known_domains:
+                            # Test if domain is accessible
+                            try:
+                                import requests
+                                response = requests.head(f"https://{domain}", timeout=2, allow_redirects=False)
+                                if domain not in [d["hostname"] for d in service_info["domains"]]:
+                                    service_info["domains"].append({
+                                        "hostname": domain,
+                                        "service": "http://localhost:8001",
+                                        "status": "accessible" if response.status_code < 500 else "error"
+                                    })
+                            except:
+                                pass
+
+                    elif "Active: inactive" in output:
+                        service_info["status"] = "stopped"
+                    elif "Active: failed" in output:
+                        service_info["status"] = "failed"
+                    else:
+                        service_info["status"] = "unknown"
+
+                    result["fixed_domain_tunnel"] = service_info
+
+                elif "Unit cloudflared.service could not be found" in systemctl_result.stderr:
+                    result["fixed_domain_tunnel"] = {
+                        "status": "not_installed",
+                        "type": "fixed_domain"
+                    }
+                else:
+                    result["fixed_domain_tunnel"] = {
+                        "status": "error",
+                        "type": "fixed_domain",
+                        "error": "Permission denied or service not accessible"
+                    }
+
+            except Exception as e:
+                result["fixed_domain_tunnel"] = {
+                    "status": "error",
+                    "type": "fixed_domain",
+                    "error": str(e)
+                }
+
+            # For backward compatibility, also include the main status
+            if result["quick_tunnel"]["status"] == "running":
+                result.update({
+                    "status": "running",
+                    "pid": result["quick_tunnel"]["pid"],
+                    "port": result["quick_tunnel"]["port"],
+                    "url": result["quick_tunnel"]["url"]
+                })
+            elif result["fixed_domain_tunnel"] and result["fixed_domain_tunnel"]["status"] == "running":
+                result.update({
+                    "status": "running",
+                    "type": "fixed_domain",
+                    "domains": result["fixed_domain_tunnel"].get("domains", [])
+                })
+            else:
+                result["status"] = "stopped"
+
+            return result
+
         except Exception as e:
             logger.error(f"Error getting tunnel status: {e}")
             return {"status": "unknown", "error": str(e)}
@@ -1386,7 +1593,7 @@ def create_dashboard_routes() -> List[Route]:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MailQueryWithMCP - Management Dashboard</title>
+    <title>KR MCP Dashboard</title>
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         * {
@@ -1638,7 +1845,7 @@ def create_dashboard_routes() -> List[Route]:
 <body>
     <div class="container">
         <div class="header" style="position: relative;">
-            <h1><span class="material-icons" style="font-size: 32px; vertical-align: bottom;">rocket_launch</span> MailQueryWithMCP Management Dashboard</h1>
+            <h1><span class="material-icons" style="font-size: 32px; vertical-align: bottom;">rocket_launch</span> KR MCP Dashboard</h1>
             <p>MCP server management, logs, and configuration</p>
             <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 10px;">
                 <a href="https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"
@@ -1654,6 +1861,15 @@ def create_dashboard_routes() -> List[Route]:
                     <span class="material-icons">logout</span>
                     <span>Logout</span>
                 </a>
+            </div>
+        </div>
+
+        <!-- All Servers Control -->
+        <div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <h2 style="color: white;"><span class="material-icons">settings</span> All Servers Control</h2>
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button class="btn" onclick="startAllServers()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; background: #4CAF50; color: white; border: none;"><span class="material-icons">play_circle</span> Start All Servers</button>
+                <button class="btn" onclick="stopAllServers()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; background: #f44336; color: white; border: none;"><span class="material-icons">stop_circle</span> Stop All Servers</button>
             </div>
         </div>
 
@@ -1692,14 +1908,6 @@ def create_dashboard_routes() -> List[Route]:
             <div class="card">
                 <h2><span class="material-icons">public</span> Cloudflare Tunnel</h2>
                 <div id="tunnel-status">Loading...</div>
-                <div style="margin-top: 15px;">
-                    <label for="tunnel-port" style="display: block; margin-bottom: 5px;">Tunnel Port:</label>
-                    <input type="number" id="tunnel-port" value="8001" min="1" max="65535" style="width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px;">
-                    <div style="display: flex; gap: 10px;">
-                        <button class="btn btn-primary" onclick="startTunnelWithPort()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">play_arrow</span> Start Tunnel</button>
-                        <button class="btn btn-danger" onclick="stopTunnel()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;"><span class="material-icons">stop</span> Stop Tunnel</button>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -1883,6 +2091,14 @@ def create_dashboard_routes() -> List[Route]:
                             </a>
                         </span>
                     </div>
+                    ${mailQueryServer.auth_db ? `
+                    <div class="info-row">
+                        <span class="info-label">Auth DB:</span>
+                        <span class="info-value" style="font-size: 0.9em; color: ${mailQueryServer.auth_db.exists ? '#10b981' : '#f59e0b'};">
+                            ${mailQueryServer.auth_db.exists ? '✅ auth_mail_query.db' : '⚠️ Not created yet'}
+                        </span>
+                    </div>
+                    ` : ''}
                 ` : mailQueryServer.status === 'starting' ? `
                     <span class="status-badge" style="background: #f59e0b;">STARTING</span>
                     <div class="info-row">
@@ -1907,6 +2123,14 @@ def create_dashboard_routes() -> List[Route]:
                             </a>
                         </span>
                     </div>
+                    ${onenoteServer.auth_db ? `
+                    <div class="info-row">
+                        <span class="info-label">Auth DB:</span>
+                        <span class="info-value" style="font-size: 0.9em; color: ${onenoteServer.auth_db.exists ? '#10b981' : '#f59e0b'};">
+                            ${onenoteServer.auth_db.exists ? '✅ auth_onenote.db' : '⚠️ Not created yet'}
+                        </span>
+                    </div>
+                    ` : ''}
                 ` : onenoteServer.status === 'starting' ? `
                     <span class="status-badge" style="background: #f59e0b;">STARTING</span>
                     <div class="info-row">
@@ -1931,6 +2155,14 @@ def create_dashboard_routes() -> List[Route]:
                             </a>
                         </span>
                     </div>
+                    ${teamsServer.auth_db ? `
+                    <div class="info-row">
+                        <span class="info-label">Auth DB:</span>
+                        <span class="info-value" style="font-size: 0.9em; color: ${teamsServer.auth_db.exists ? '#10b981' : '#f59e0b'};">
+                            ${teamsServer.auth_db.exists ? '✅ auth_teams.db' : '⚠️ Not created yet'}
+                        </span>
+                    </div>
+                    ` : ''}
                 ` : teamsServer.status === 'starting' ? `
                     <span class="status-badge" style="background: #f59e0b;">STARTING</span>
                     <div class="info-row">
@@ -1939,28 +2171,93 @@ def create_dashboard_routes() -> List[Route]:
                     </div>
                 ` : `<span class="status-badge status-stopped">STOPPED</span>`;
 
-                const tunnelHtml = data.tunnel.status === 'running' ? `
-                    <span class="status-badge status-running">RUNNING</span>
-                    <div class="info-row">
-                        <span class="info-label">PID:</span>
-                        <span class="info-value">${data.tunnel.pid}</span>
-                    </div>
-                    ${data.tunnel.port ? `
-                    <div class="info-row">
-                        <span class="info-label">Port:</span>
-                        <span class="info-value">${data.tunnel.port}</span>
-                    </div>` : ''}
-                    ${data.tunnel.url ? `
-                    <div class="info-row">
-                        <span class="info-label">Public URL:</span>
-                        <span class="info-value">
-                            <a href="${data.tunnel.url}" target="_blank" class="url-copy" onclick="copyToClipboard('${data.tunnel.url}'); event.preventDefault();">
-                                ${data.tunnel.url}
-                            </a>
-                        </span>
-                    </div>
-                    ` : ''}
-                ` : `<span class="status-badge status-stopped">STOPPED</span>`;
+                // Render tunnel status based on type
+                let tunnelHtml = '';
+
+                // Check for fixed domain tunnel
+                if (data.tunnel.fixed_domain_tunnel && data.tunnel.fixed_domain_tunnel.status === 'running') {
+                    tunnelHtml = `
+                        <span class="status-badge status-running" style="background: #8b5cf6;">FIXED DOMAIN</span>
+                        <div class="info-row">
+                            <span class="info-label">Type:</span>
+                            <span class="info-value">Persistent Tunnel (systemd)</span>
+                        </div>
+                        ${data.tunnel.fixed_domain_tunnel.pid ? `
+                        <div class="info-row">
+                            <span class="info-label">PID:</span>
+                            <span class="info-value">${data.tunnel.fixed_domain_tunnel.pid}</span>
+                        </div>` : ''}
+                        ${data.tunnel.fixed_domain_tunnel.memory ? `
+                        <div class="info-row">
+                            <span class="info-label">Memory:</span>
+                            <span class="info-value">${data.tunnel.fixed_domain_tunnel.memory}</span>
+                        </div>` : ''}
+                        ${data.tunnel.fixed_domain_tunnel.domains && data.tunnel.fixed_domain_tunnel.domains.length > 0 ? `
+                        <div class="info-row">
+                            <span class="info-label">Domains:</span>
+                            <span class="info-value" style="display: block;">
+                                ${data.tunnel.fixed_domain_tunnel.domains.map(d => `
+                                    <div style="margin: 2px 0;">
+                                        <a href="https://${d.hostname}" target="_blank" onclick="copyToClipboard('https://${d.hostname}'); event.preventDefault();" style="color: #667eea;">
+                                            ${d.hostname}
+                                        </a>
+                                    </div>
+                                `).join('')}
+                            </span>
+                        </div>` : ''}
+                    `;
+                }
+                // Check for quick tunnel
+                else if (data.tunnel.quick_tunnel && data.tunnel.quick_tunnel.status === 'running') {
+                    tunnelHtml = `
+                        <span class="status-badge status-running">QUICK TUNNEL</span>
+                        <div class="info-row">
+                            <span class="info-label">PID:</span>
+                            <span class="info-value">${data.tunnel.quick_tunnel.pid}</span>
+                        </div>
+                        ${data.tunnel.quick_tunnel.port ? `
+                        <div class="info-row">
+                            <span class="info-label">Port:</span>
+                            <span class="info-value">${data.tunnel.quick_tunnel.port}</span>
+                        </div>` : ''}
+                        ${data.tunnel.quick_tunnel.url ? `
+                        <div class="info-row">
+                            <span class="info-label">Public URL:</span>
+                            <span class="info-value">
+                                <a href="${data.tunnel.quick_tunnel.url}" target="_blank" class="url-copy" onclick="copyToClipboard('${data.tunnel.quick_tunnel.url}'); event.preventDefault();">
+                                    ${data.tunnel.quick_tunnel.url}
+                                </a>
+                            </span>
+                        </div>` : ''}
+                    `;
+                }
+                // Fallback for backward compatibility
+                else if (data.tunnel.status === 'running') {
+                    tunnelHtml = `
+                        <span class="status-badge status-running">RUNNING</span>
+                        <div class="info-row">
+                            <span class="info-label">PID:</span>
+                            <span class="info-value">${data.tunnel.pid}</span>
+                        </div>
+                        ${data.tunnel.port ? `
+                        <div class="info-row">
+                            <span class="info-label">Port:</span>
+                            <span class="info-value">${data.tunnel.port}</span>
+                        </div>` : ''}
+                        ${data.tunnel.url ? `
+                        <div class="info-row">
+                            <span class="info-label">Public URL:</span>
+                            <span class="info-value">
+                                <a href="${data.tunnel.url}" target="_blank" class="url-copy" onclick="copyToClipboard('${data.tunnel.url}'); event.preventDefault();">
+                                    ${data.tunnel.url}
+                                </a>
+                            </span>
+                        </div>
+                        ` : ''}
+                    `;
+                } else {
+                    tunnelHtml = `<span class="status-badge status-stopped">STOPPED</span>`;
+                }
 
                 document.getElementById('mail-query-server-status').innerHTML = mailQueryHtml;
                 document.getElementById('onenote-server-status').innerHTML = onenoteHtml;
@@ -2203,6 +2500,48 @@ def create_dashboard_routes() -> List[Route]:
         }
 
         // Stop server
+        async function startAllServers() {
+            try {
+                const response = await fetch('/dashboard/api/servers/start_all', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('All servers started successfully!');
+                } else {
+                    showToast(data.summary || 'Some servers failed to start', true);
+                }
+                setTimeout(() => loadServerStatus(), 2000);
+            } catch (error) {
+                console.error('Error starting all servers:', error);
+                showToast('Failed to start all servers', true);
+            }
+        }
+
+        async function stopAllServers() {
+            if (!confirm('Are you sure you want to stop all servers?')) return;
+
+            try {
+                const response = await fetch('/dashboard/api/servers/stop_all', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('All servers stopped successfully!');
+                } else {
+                    showToast(data.summary || 'Some servers failed to stop', true);
+                }
+                setTimeout(() => loadServerStatus(), 2000);
+            } catch (error) {
+                console.error('Error stopping all servers:', error);
+                showToast('Failed to stop all servers', true);
+            }
+        }
+
         async function stopServer(serverType) {
             const serverName = serverType === 'mail_query' ? 'Mail Query' :
                               serverType === 'onenote' ? 'OneNote' :
@@ -2229,10 +2568,12 @@ def create_dashboard_routes() -> List[Route]:
             }
         }
 
-        // Start tunnel with specified port
+        // Quick tunnel functions (commented out - using fixed domain tunnel via systemd)
+        // These functions are preserved for potential future use with quick tunnels
+        /*
         async function startTunnelWithPort() {
             try {
-                const port = document.getElementById('tunnel-port').value;
+                const port = 8001; // Default port for quick tunnel
                 showToast(`Starting tunnel on port ${port}... This may take up to 20 seconds.`);
 
                 const response = await fetch('/dashboard/api/tunnel/start', {
@@ -2254,12 +2595,10 @@ def create_dashboard_routes() -> List[Route]:
             }
         }
 
-        // Backward compatibility
         async function startTunnel() {
             startTunnelWithPort();
         }
 
-        // Stop tunnel
         async function stopTunnel() {
             if (!confirm('Are you sure you want to stop the tunnel?')) return;
 
@@ -2278,6 +2617,7 @@ def create_dashboard_routes() -> List[Route]:
                 showToast('Error stopping tunnel');
             }
         }
+        */
 
         // Load databases list
         async function loadDatabases() {
@@ -2714,6 +3054,26 @@ def create_dashboard_routes() -> List[Route]:
             result = service.stop_server()
         return JSONResponse(result)
 
+    # API: Start all servers
+    async def api_start_all_servers(request):
+        """Start all MCP servers"""
+        try:
+            result = service.start_all_servers()
+        except:
+            logger.exception("Error starting all servers")
+            result = {"success": False, "error": "Internal server error"}
+        return JSONResponse(result)
+
+    # API: Stop all servers
+    async def api_stop_all_servers(request):
+        """Stop all MCP servers"""
+        try:
+            result = service.stop_all_servers()
+        except:
+            logger.exception("Error stopping all servers")
+            result = {"success": False, "error": "Internal server error"}
+        return JSONResponse(result)
+
     # API: Start tunnel
     async def api_start_tunnel(request):
         """Start Cloudflare tunnel with optional port"""
@@ -2939,6 +3299,8 @@ def create_dashboard_routes() -> List[Route]:
             "/dashboard/api/server/start", endpoint=api_start_server, methods=["POST"]
         ),
         Route("/dashboard/api/server/stop", endpoint=api_stop_server, methods=["POST"]),
+        Route("/dashboard/api/servers/start_all", endpoint=api_start_all_servers, methods=["POST"]),
+        Route("/dashboard/api/servers/stop_all", endpoint=api_stop_all_servers, methods=["POST"]),
         Route(
             "/dashboard/api/tunnel/start", endpoint=api_start_tunnel, methods=["POST"]
         ),
