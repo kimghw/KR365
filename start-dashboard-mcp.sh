@@ -22,15 +22,24 @@ case "$SERVER_TYPE" in
     onenote)
         FASTAPI_PID_FILE="/tmp/onenote_fastapi.pid"
         FASTAPI_LOG_FILE="logs/onenote_fastapi.log"
-        FASTAPI_PORT=${ONENOTE_SERVER_PORT:-8003}
+        FASTAPI_PORT=${ONENOTE_SERVER_PORT:-8002}
         FASTAPI_SCRIPT="modules/onenote_mcp/entrypoints/run_fastapi.py"
         export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_onenote.db"
         export DATABASE_ONENOTE_PATH="${SCRIPT_DIR}/data/onenote.db"
         SERVER_DISPLAY_NAME="OneNote"
         ;;
+    teams)
+        FASTAPI_PID_FILE="/tmp/teams_fastapi.pid"
+        FASTAPI_LOG_FILE="logs/teams_fastapi.log"
+        FASTAPI_PORT=${TEAMS_API_PORT:-8003}
+        FASTAPI_SCRIPT="modules/teams_mcp/entrypoints/run_fastapi.py"
+        export DCR_DATABASE_PATH="${SCRIPT_DIR}/data/auth_teams.db"
+        export DATABASE_TEAMS_PATH="${SCRIPT_DIR}/data/teams.db"
+        SERVER_DISPLAY_NAME="Teams"
+        ;;
     *)
         echo "❌ Unknown server type: $SERVER_TYPE"
-        echo "Valid values: mail_query, onenote"
+        echo "Valid values: mail_query, onenote, teams"
         exit 1
         ;;
 esac
@@ -358,10 +367,11 @@ case "${1:-start-dashboard}" in
         echo "  logs                  - Show live logs from all servers"
         echo ""
         echo "Environment variables:"
-        echo "  SERVER_TYPE           - Server to run: mail_query|onenote (default: mail_query)"
+        echo "  SERVER_TYPE           - Server to run: mail_query|onenote|teams (default: mail_query)"
         echo "  DASHBOARD_PORT        - Port for dashboard (default: 8000)"
         echo "  MAIL_API_PORT         - Port for Mail Query FastAPI (default: 8001)"
-        echo "  ONENOTE_SERVER_PORT   - Port for OneNote FastAPI (default: 8003)"
+        echo "  ONENOTE_SERVER_PORT   - Port for OneNote FastAPI (default: 8002)"
+        echo "  TEAMS_API_PORT        - Port for Teams FastAPI (default: 8003)"
         echo ""
         echo "Examples:"
         echo "  # Start Dashboard only (default)"
@@ -370,8 +380,11 @@ case "${1:-start-dashboard}" in
         echo "  # Start all services (FastAPI + Dashboard)"
         echo "  ./start-dashboard-mcp.sh start-all"
         echo ""
-        echo "  # Start OneNote server on port 8002"
-        echo "  SERVER_TYPE=onenote ONENOTE_SERVER_PORT=8002 ./start-dashboard-mcp.sh start-all"
+        echo "  # Start OneNote server"
+        echo "  SERVER_TYPE=onenote ./start-dashboard-mcp.sh start-all"
+        echo ""
+        echo "  # Start Teams server"
+        echo "  SERVER_TYPE=teams ./start-dashboard-mcp.sh start-all"
         echo ""
         echo "Default action: start-dashboard (dashboard only)"
         echo ""

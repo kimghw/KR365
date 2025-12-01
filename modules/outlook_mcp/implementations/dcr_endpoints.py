@@ -69,8 +69,13 @@ def add_dcr_endpoints(app):
             body = await request.body()
             request_data = json.loads(body) if body else {}
 
+            # Extract MCP Session ID from headers or request body
+            mcp_session_id = request.headers.get("X-MCP-Session-ID") or request_data.get("mcp_session_id")
+            if mcp_session_id:
+                logger.info(f"🔑 MCP Session ID detected: {mcp_session_id[:10]}...")
+
             dcr_service = DCRService(module_name=MODULE_NAME)
-            response = await dcr_service.register_client(request_data)
+            response = await dcr_service.register_client(request_data, mcp_session_id=mcp_session_id)
 
             logger.info(f"✅ DCR client registered: {response['client_id']}")
 
@@ -428,8 +433,8 @@ def add_dcr_endpoints(app):
     async def oauth_token(
         request: Request,
         grant_type: str = Form(...),
-        client_id: str = Form(...),
-        client_secret: str = Form(...),
+        client_id: str = Form(None),  # Made optional for ChatGPT compatibility
+        client_secret: str = Form(None),  # Made optional for PKCE flow
         code: str = Form(None),
         redirect_uri: str = Form(None),
         code_verifier: str = Form(None),  # PKCE support
@@ -453,8 +458,47 @@ def add_dcr_endpoints(app):
 
         logger.info(f"📨 Token request: grant_type={grant_type}, client_id={client_id}, code={'***' if code else None}, refresh_token={'***' if refresh_token else None}, redirect_uri={redirect_uri}, code_verifier={'***' if code_verifier else None}, client_name={client_name}")
 
+        # If client_id is missing, try to extract it from the token
+        if not client_id:
+            if grant_type == "authorization_code" and code:
+                # Get client_id from authorization code
+                code_info = dcr_service.db_service.fetch_one(
+                    f"SELECT dcr_client_id FROM {dcr_service._get_table_name('dcr_tokens')} "
+                    f"WHERE dcr_token_type = 'authorization_code' AND dcr_token_value = ?",
+                    (code,)
+                )
+                if code_info:
+                    client_id = code_info[0]
+                    logger.info(f"📎 Extracted client_id from authorization code: {client_id}")
+                else:
+                    logger.error(f"❌ Could not extract client_id from authorization code")
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "client_id is required or invalid authorization code"},
+                        status_code=400
+                    )
+            elif grant_type == "refresh_token" and refresh_token:
+                # Get client_id from refresh token (token is stored encrypted)
+                from infra.core.crypto import get_crypto
+                crypto = get_crypto()
+                encrypted_token = crypto.account_encrypt_sensitive_data(refresh_token)
+
+                refresh_info = dcr_service.db_service.fetch_one(
+                    f"SELECT dcr_client_id FROM {dcr_service._get_table_name('dcr_tokens')} "
+                    f"WHERE dcr_token_type = 'refresh' AND dcr_token_value = ?",
+                    (encrypted_token,)
+                )
+                if refresh_info:
+                    client_id = refresh_info[0]
+                    logger.info(f"📎 Extracted client_id from refresh token: {client_id}")
+                else:
+                    logger.error(f"❌ Could not extract client_id from refresh token")
+                    return JSONResponse(
+                        {"error": "invalid_grant", "error_description": "Invalid refresh token"},
+                        status_code=400
+                    )
+
         # Check if client exists
-        client = dcr_service.get_client(client_id)
+        client = dcr_service.get_client(client_id) if client_id else None
 
         if not client:
             # Auto-register client if not exists (only for authorization_code grant)
@@ -488,11 +532,20 @@ def add_dcr_endpoints(app):
                 )
         else:
             # Verify client credentials
-            if not dcr_service.verify_client_credentials(client_id, client_secret):
-                return JSONResponse(
-                    {"error": "invalid_client", "error_description": "Invalid client credentials"},
-                    status_code=401
-                )
+            # Skip client_secret verification for PKCE flow (when code_verifier is provided)
+            if code_verifier:
+                logger.info("🔐 PKCE flow detected, skipping client_secret verification")
+            elif client_secret:
+                # Only verify if client_secret is provided
+                if not dcr_service.verify_client_credentials(client_id, client_secret):
+                    return JSONResponse(
+                        {"error": "invalid_client", "error_description": "Invalid client credentials"},
+                        status_code=401
+                    )
+            else:
+                # No PKCE and no client_secret - this might be a security issue
+                logger.warning(f"⚠️ No client_secret or PKCE for client {client_id}")
+                # Allow it for now for compatibility, but log the warning
 
         # Authorization code grant
         if grant_type == "authorization_code":
@@ -631,8 +684,9 @@ def add_dcr_endpoints(app):
                 scopes=scope_list,
             )
 
-            # Generate new DCR access token only (refresh token remains unchanged)
+            # Generate new DCR tokens (both access and refresh for better security)
             new_access_token = secrets.token_urlsafe(32)
+            new_dcr_refresh_token = secrets.token_urlsafe(32)
 
             # Parse Azure token expiry
             # oauth_client returns 'expiry_time' not 'expiry'
@@ -642,11 +696,11 @@ def add_dcr_endpoints(app):
             else:
                 azure_expiry = expiry_value
 
-            # Store new tokens (refresh_token=None means keep existing DCR refresh token)
+            # Store new tokens (generate new DCR refresh token for rotation)
             dcr_service.store_tokens(
                 dcr_client_id=client_id,
                 dcr_access_token=new_access_token,
-                dcr_refresh_token=None,  # Keep existing DCR refresh token
+                dcr_refresh_token=new_dcr_refresh_token,  # New DCR refresh token for rotation
                 expires_in=dcr_service.dcr_bearer_ttl_seconds,
                 scope=scope,
                 azure_object_id=azure_object_id,
@@ -657,14 +711,22 @@ def add_dcr_endpoints(app):
                 user_name=refresh_data.get("user_name"),
             )
 
-            logger.info(f"✅ Token refreshed for DCR client: {client_id}")
+            # Invalidate old refresh token to prevent reuse
+            dcr_service.db_service.execute_query(
+                f"UPDATE {dcr_service._get_table_name('dcr_tokens')} "
+                f"SET expires_at = datetime('now', '-1 hour') "
+                f"WHERE dcr_token_type = 'refresh_token' AND dcr_token_value = ?",
+                (refresh_token,)
+            )
+
+            logger.info(f"✅ Token refreshed with rotation for DCR client: {client_id}")
 
             return JSONResponse(
                 {
                     "access_token": new_access_token,
                     "token_type": "Bearer",
                     "expires_in": dcr_service.dcr_bearer_ttl_seconds,
-                    "refresh_token": refresh_token,  # Return the same refresh token
+                    "refresh_token": new_dcr_refresh_token,  # Return new refresh token (rotation)
                     "scope": scope,
                 },
                 headers={
