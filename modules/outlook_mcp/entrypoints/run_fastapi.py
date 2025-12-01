@@ -36,6 +36,11 @@ def main():
 
     args = parser.parse_args()
 
+    # Create logs directory if it doesn't exist
+    logs_dir = PROJECT_ROOT / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"📂 Ensured logs directory exists: {logs_dir}")
+
     logger.info("🚀 Starting Mail Query MCP FastAPI Server")
     logger.info(f"📁 Project root: {PROJECT_ROOT}")
     logger.info(f"🌐 Server will listen on {args.host}:{args.port}")

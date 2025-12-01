@@ -1639,7 +1639,7 @@ def create_dashboard_routes() -> List[Route]:
     <div class="container">
         <div class="header" style="position: relative;">
             <h1><span class="material-icons" style="font-size: 32px; vertical-align: bottom;">rocket_launch</span> MailQueryWithMCP Management Dashboard</h1>
-            <p>Unified server management, logs, and configuration</p>
+            <p>MCP server management, logs, and configuration</p>
             <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 10px;">
                 <a href="https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"
                    target="_blank"
@@ -2188,7 +2188,10 @@ def create_dashboard_routes() -> List[Route]:
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast(`${serverType === 'mail_query' ? 'Mail Query' : 'OneNote'} server started successfully!`);
+                    const serverName = serverType === 'mail_query' ? 'Mail Query' :
+                                      serverType === 'onenote' ? 'OneNote' :
+                                      serverType === 'teams' ? 'Teams' : 'Server';
+                    showToast(`${serverName} server started successfully!`);
                     setTimeout(() => loadServerStatus(), 2000);
                 } else {
                     showToast('Failed to start server: ' + data.error);
@@ -2201,7 +2204,10 @@ def create_dashboard_routes() -> List[Route]:
 
         // Stop server
         async function stopServer(serverType) {
-            if (!confirm(`Are you sure you want to stop the ${serverType === 'mail_query' ? 'Mail Query' : 'OneNote'} server?`)) return;
+            const serverName = serverType === 'mail_query' ? 'Mail Query' :
+                              serverType === 'onenote' ? 'OneNote' :
+                              serverType === 'teams' ? 'Teams' : 'Server';
+            if (!confirm(`Are you sure you want to stop the ${serverName} server?`)) return;
 
             try {
                 const response = await fetch('/dashboard/api/server/stop', {
@@ -2212,7 +2218,7 @@ def create_dashboard_routes() -> List[Route]:
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast(`${serverType === 'mail_query' ? 'Mail Query' : 'OneNote'} server stopped successfully!`);
+                    showToast(`${serverName} server stopped successfully!`);
                     setTimeout(() => loadServerStatus(), 2000);
                 } else {
                     showToast('Failed to stop server: ' + data.error);

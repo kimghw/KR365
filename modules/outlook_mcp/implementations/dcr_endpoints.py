@@ -36,6 +36,31 @@ def add_dcr_endpoints(app):
     MODULE_NAME = _get_module_name_from_config()
     logger.info(f"📋 DCR endpoints using module_name: {MODULE_NAME}")
 
+    # Add middleware to log raw requests for /oauth/token endpoint
+    @app.middleware("http")
+    async def log_token_requests(request: Request, call_next):
+        if request.url.path == "/oauth/token" and request.method == "POST":
+            try:
+                # Store body for later use
+                body = await request.body()
+                headers = dict(request.headers)
+                logger.info(f"🔍 Raw /oauth/token request from {request.client.host}")
+                logger.info(f"  Content-Type: {headers.get('content-type', 'Not provided')}")
+                logger.info(f"  Body: {body.decode('utf-8')[:500] if body else 'Empty body'}")
+
+                # Create new Request with body for downstream handlers
+                from starlette.datastructures import Headers
+                import io
+                async def receive():
+                    return {"type": "http.request", "body": body}
+
+                request._body = body
+                request._receive = receive
+            except Exception as e:
+                logger.error(f"Failed to log raw request: {e}")
+        response = await call_next(request)
+        return response
+
     # DCR Registration endpoint
     @app.post("/oauth/register", tags=["OAuth/DCR"])
     async def dcr_register(request: Request):
@@ -142,10 +167,14 @@ def add_dcr_endpoints(app):
             )
 
         # Map to Azure AD redirect URI (our callback)
-        # Use port from environment or default
+        # Use redirect URI from environment or default
         import os
-        port = int(os.getenv("MAIL_API_PORT", "8001"))
-        azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
+        # First check for DCR_OAUTH_REDIRECT_URI environment variable
+        azure_redirect_uri = os.getenv("DCR_OAUTH_REDIRECT_URI")
+        if not azure_redirect_uri:
+            # Fallback to localhost with port
+            port = int(os.getenv("MAIL_API_PORT", "8001"))
+            azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
 
         # Store original request for callback (with PKCE support)
         auth_code = dcr_service.create_authorization_code(
@@ -219,10 +248,15 @@ def add_dcr_endpoints(app):
         try:
             from infra.core.oauth_client import get_oauth_client
             import httpx
+            import os
 
             oauth_client = get_oauth_client()
-            port = int(os.getenv("MAIL_API_PORT", "8001"))
-            azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
+            # First check for DCR_OAUTH_REDIRECT_URI environment variable
+            azure_redirect_uri = os.getenv("DCR_OAUTH_REDIRECT_URI")
+            if not azure_redirect_uri:
+                # Fallback to localhost with port
+                port = int(os.getenv("MAIL_API_PORT", "8001"))
+                azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
 
             # Exchange Azure code for access token
             token_info = await oauth_client.exchange_code_for_tokens_with_account_config(
@@ -392,6 +426,7 @@ def add_dcr_endpoints(app):
     # OAuth Token endpoint
     @app.post("/oauth/token", tags=["OAuth/DCR"])
     async def oauth_token(
+        request: Request,
         grant_type: str = Form(...),
         client_id: str = Form(...),
         client_secret: str = Form(...),
@@ -400,11 +435,19 @@ def add_dcr_endpoints(app):
         code_verifier: str = Form(None),  # PKCE support
         refresh_token: str = Form(None),
         client_name: str = Form(None),  # For auto-registration
-        request: Request = None
     ):
         """OAuth Token Endpoint - RFC 6749 compliant with auto-registration"""
         from infra.core.oauth_client import get_oauth_client
         from datetime import datetime
+
+        # Debug logging for raw request
+        try:
+            body = await request.body()
+            headers = dict(request.headers)
+            logger.info(f"🔍 Raw token request - Headers: {headers}")
+            logger.info(f"🔍 Raw token request - Body: {body.decode('utf-8') if body else 'Empty body'}")
+        except Exception as e:
+            logger.error(f"Failed to log raw request: {e}")
 
         dcr_service = DCRService(module_name=MODULE_NAME)
 
