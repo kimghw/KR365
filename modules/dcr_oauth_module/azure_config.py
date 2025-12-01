@@ -88,6 +88,32 @@ def ensure_dcr_schema(service) -> None:
             ON dcr_tokens{module_suffix}(dcr_client_id);
         CREATE INDEX IF NOT EXISTS idx_dcr_tokens{module_suffix}_status
             ON dcr_tokens{module_suffix}(dcr_status);
+
+        -- API Request Logs table for middleware logging
+        CREATE TABLE IF NOT EXISTS api_request_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            method TEXT,
+            path TEXT,
+            headers TEXT,
+            query_params TEXT,
+            request_body TEXT,
+            response_status INTEGER,
+            response_body TEXT,
+            duration_ms INTEGER,
+            client_ip TEXT,
+            user_agent TEXT,
+            dcr_client_id TEXT,
+            azure_object_id TEXT,
+            user_id TEXT,
+            error_message TEXT,
+            trace_id TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_api_request_logs_created_at
+            ON api_request_logs(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_api_request_logs_trace_id
+            ON api_request_logs(trace_id);
         """
 
         conn.executescript(schema_sql)
@@ -188,14 +214,39 @@ def load_azure_config(service) -> None:
     env_app_id = os.getenv("DCR_AZURE_CLIENT_ID")
     env_secret = os.getenv("DCR_AZURE_CLIENT_SECRET")
     env_tenant = os.getenv("DCR_AZURE_TENANT_ID", "common")
+
+    # Generate redirect URI from DCR_OAUTH_ENDPOINT if available
+    env_endpoint = os.getenv("DCR_OAUTH_ENDPOINT")
     env_redirect = os.getenv("DCR_OAUTH_REDIRECT_URI")
+
+    # If DCR_OAUTH_ENDPOINT is set but not DCR_OAUTH_REDIRECT_URI, auto-generate it
+    if env_endpoint and not env_redirect:
+        # Parse the endpoint to extract protocol and domain
+        from urllib.parse import urlparse
+        parsed = urlparse(env_endpoint)
+
+        # Extract protocol and domain
+        protocol = parsed.scheme  # http or https
+        domain = parsed.netloc  # e.g., kimghw.org
+
+        # Generate redirect URI with subdomain based on module_name
+        # module_name is used for identifying the specific MCP server (mail_query, onenote, teams, etc.)
+        if service.module_name and service.module_name != "default":
+            # Replace underscore with hyphen for valid subdomain
+            subdomain = service.module_name.replace('_', '-')
+            env_redirect = f"{protocol}://{subdomain}.{domain}/oauth/callback"
+        else:
+            env_redirect = f"{protocol}://{domain}/oauth/callback"
+
+        logger.info(f"🔄 Auto-generated redirect URI from DCR_OAUTH_ENDPOINT: {env_redirect}")
 
     # Debug logging for environment variables
     logger.info(f"🔍 Environment variables check:")
     logger.info(f"  DCR_AZURE_CLIENT_ID: {'Set' if env_app_id else 'Not set'}")
     logger.info(f"  DCR_AZURE_CLIENT_SECRET: {'Set' if env_secret else 'Not set'}")
     logger.info(f"  DCR_AZURE_TENANT_ID: {env_tenant}")
-    logger.info(f"  DCR_OAUTH_REDIRECT_URI: {env_redirect if env_redirect else 'Not set'}")
+    logger.info(f"  DCR_OAUTH_ENDPOINT: {env_endpoint if env_endpoint else 'Not set'}")
+    logger.info(f"  DCR_OAUTH_REDIRECT_URI: {env_redirect if env_redirect else 'Not set (auto-generated)' if env_endpoint else 'Not set'}")
 
     if result:
         current_app_id = result[0]
@@ -271,11 +322,21 @@ def load_azure_config(service) -> None:
         service.azure_application_id = env_app_id
         service.azure_client_secret = env_secret
         service.azure_tenant_id = env_tenant
-        # Always prefer env_redirect from DCR_OAUTH_REDIRECT_URI
-        service.azure_redirect_uri = env_redirect or service.config.oauth_redirect_uri
+
+        # Use auto-generated or explicit redirect URI
+        if env_redirect:
+            service.azure_redirect_uri = env_redirect
+        elif hasattr(service.config, 'oauth_redirect_uri'):
+            service.azure_redirect_uri = service.config.oauth_redirect_uri
+        else:
+            # If no redirect URI is available, log a warning
+            service.azure_redirect_uri = None
 
         if service.azure_application_id and service.azure_client_secret:
-            logger.info(f"✅ Loaded Azure config from environment: {service.azure_application_id}, redirect_uri: {service.azure_redirect_uri}")
+            if service.azure_redirect_uri:
+                logger.info(f"✅ Loaded Azure config from environment: {service.azure_application_id}, redirect_uri: {service.azure_redirect_uri}")
+            else:
+                logger.warning(f"⚠️ Loaded Azure config from environment: {service.azure_application_id}, but redirect_uri is missing")
             save_azure_config_to_db(service)
         else:
             logger.warning("⚠️ No Azure config found. DCR will not work.")

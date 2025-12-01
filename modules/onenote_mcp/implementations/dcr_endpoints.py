@@ -36,6 +36,11 @@ def add_dcr_endpoints(app):
     MODULE_NAME = _get_module_name_from_config()
     logger.info(f"📋 DCR endpoints using module_name: {MODULE_NAME}")
 
+    # DCRService를 한 번 초기화하여 DB 스키마 생성
+    initial_dcr_service = DCRService(module_name=MODULE_NAME)
+    logger.info(f"✅ DCR Service initialized with auth DB for module: {MODULE_NAME}")
+    del initial_dcr_service  # 초기화만 하고 삭제
+
     # DCR Registration endpoint
     @app.post("/oauth/register", tags=["OAuth/DCR"])
     async def dcr_register(request: Request):
@@ -141,10 +146,14 @@ def add_dcr_endpoints(app):
             )
 
         # Map to Azure AD redirect URI (our callback)
-        # Use port from environment or default
-        import os
-        port = int(os.getenv("ONENOTE_SERVER_PORT", "8003"))
-        azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
+        # Use the redirect URI from DCR service (loaded from DB/env)
+        azure_redirect_uri = dcr_service.azure_redirect_uri
+        if not azure_redirect_uri:
+            logger.error("Azure redirect URI not configured")
+            return JSONResponse(
+                {"error": "server_error", "error_description": "Azure redirect URI not configured"},
+                status_code=500
+            )
 
         # Store original request for callback (with PKCE support)
         auth_code = dcr_service.create_authorization_code(
@@ -183,8 +192,8 @@ def add_dcr_endpoints(app):
         )
 
     # Azure callback endpoint
-    @app.get("/oauth/azure_callback", tags=["OAuth/DCR"])
-    async def oauth_azure_callback(
+    @app.get("/oauth/callback", tags=["OAuth/DCR"])
+    async def oauth_callback(
         code: str = None,
         state: str = None,  # This is our auth_code
         error: str = None,
@@ -221,8 +230,9 @@ def add_dcr_endpoints(app):
             import os
 
             oauth_client = get_oauth_client()
-            port = int(os.getenv("ONENOTE_SERVER_PORT", "8003"))
-            azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
+
+            # Use the same redirect URI that was used in authorization request
+            azure_redirect_uri = dcr_service.azure_redirect_uri
 
             # Exchange Azure code for access token
             token_info = await oauth_client.exchange_code_for_tokens_with_account_config(

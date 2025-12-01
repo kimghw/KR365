@@ -19,17 +19,16 @@ logger = get_logger(__name__)
 class DCRAuthMixin:
     """DCR OAuth 인증 믹스인"""
 
-    def __init__(self, server_name: str = "default", module_name: str = None):
+    def __init__(self, module_name: str = "default"):
         """
         DCR 인증 믹스인 초기화
 
         Args:
-            server_name: 서버 이름 (DCR 서비스 식별용)
-            module_name: 모듈 이름 (테이블 접미사용)
+            module_name: 모듈 이름 (테이블 접미사 및 redirect URI 생성용)
         """
-        self.dcr_service = DCRService(server_name=server_name, module_name=module_name)
-        self.server_name = server_name
-        logger.info(f"DCR Auth initialized for server: {server_name}")
+        self.dcr_service = DCRService(module_name=module_name)
+        self.module_name = module_name
+        logger.info(f"DCR Auth initialized for module: {module_name}")
 
     def register_dcr_routes(self, app):
         """

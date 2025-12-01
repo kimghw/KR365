@@ -48,8 +48,8 @@
   },
   "dcr_oauth": {
     "comment": "DCR OAuth 모듈 의존성 설정",
-    "module_name": "mail_query",
+    "module_name": "outlook",
     "database_name_pattern": "auth_{module_name}.db",
-    "description": "mail_query 모듈이 DCR 인증을 사용함을 명시. DCR은 auth_mail_query.db를 사용"
+    "description": "outlook 모듈이 DCR 인증을 사용함을 명시. DCR은 auth_outlook.db를 사용"
   }
 }

@@ -13,6 +13,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+env_file = PROJECT_ROOT / ".env"
+if env_file.exists():
+    load_dotenv(env_file)
+
 from modules.onenote_mcp.implementations.fastapi_server import FastAPIOneNoteServer
 from infra.core.logger import get_logger
 

@@ -144,9 +144,14 @@ def add_dcr_endpoints(app):
             )
 
         # Map to Azure AD redirect URI (our callback)
-        # Use port from environment or default
-        port = int(os.getenv("TEAMS_API_PORT", "8003"))
-        azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
+        # Use the redirect URI from DCR service (loaded from DB/env)
+        azure_redirect_uri = dcr_service.azure_redirect_uri
+        if not azure_redirect_uri:
+            logger.error("Azure redirect URI not configured")
+            return JSONResponse(
+                {"error": "server_error", "error_description": "Azure redirect URI not configured"},
+                status_code=500
+            )
 
         # Store original request for callback (with PKCE support)
         auth_code = dcr_service.create_authorization_code(
@@ -185,8 +190,8 @@ def add_dcr_endpoints(app):
         )
 
     # Azure callback endpoint
-    @app.get("/oauth/azure_callback", tags=["OAuth/DCR"])
-    async def oauth_azure_callback(
+    @app.get("/oauth/callback", tags=["OAuth/DCR"])
+    async def oauth_callback(
         code: str = None,
         state: str = None,  # This is our auth_code
         error: str = None,
@@ -222,8 +227,9 @@ def add_dcr_endpoints(app):
             import httpx
 
             oauth_client = get_oauth_client()
-            port = int(os.getenv("TEAMS_API_PORT", "8003"))
-            azure_redirect_uri = f"http://localhost:{port}/oauth/azure_callback"
+
+            # Use the same redirect URI that was used in authorization request
+            azure_redirect_uri = dcr_service.azure_redirect_uri
 
             # Exchange Azure code for access token
             token_info = await oauth_client.exchange_code_for_tokens_with_account_config(

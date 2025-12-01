@@ -38,12 +38,48 @@ class DCRService:
     - dcr_tokens: Claude 토큰 (DCR이 발급)
     """
 
-    def __init__(self, server_name: str = "default", module_name: str = None):
-        from infra.core.config import get_config
+    def __init__(self, module_name: str = "default", server_name: str = None):
+        """Initialize DCR Service
 
-        self.config = get_config()
-        self.server_name = server_name
-        self.module_name = module_name or server_name  # 모듈 이름 (테이블 접미사로 사용)
+        Args:
+            module_name: The name of the MCP module (mail_query, onenote, teams, etc.)
+                        Used for table suffixes and redirect URI generation
+            server_name: Deprecated, kept for backward compatibility. Use module_name instead.
+        """
+        # Always load .env file first - DCRService should be self-contained
+        from pathlib import Path
+        from dotenv import load_dotenv
+
+        project_root = Path(__file__).parent.parent.parent
+        env_file = project_root / ".env"
+        if env_file.exists():
+            load_dotenv(env_file, override=True)  # Force reload to ensure latest values
+            logger.info(f"📋 DCRService loaded .env from {env_file}")
+        else:
+            logger.warning(f"⚠️ .env file not found at {env_file}")
+
+        # Check if required environment variables are present
+        if not os.getenv("DCR_AZURE_CLIENT_ID"):
+            logger.error("❌ DCR_AZURE_CLIENT_ID not found in environment after loading .env")
+
+        # Config is optional - DCRService should work without it
+        try:
+            from infra.core.config import get_config
+            self.config = get_config()
+        except ImportError:
+            # Create minimal config with required attributes
+            class MinimalConfig:
+                def __init__(self):
+                    self.dcr_access_token_ttl_seconds = os.getenv("DCR_ACCESS_TOKEN_TTL_SECONDS", "3600")
+            self.config = MinimalConfig()
+            logger.info("📋 DCRService running with minimal config")
+
+        # For backward compatibility: if server_name is provided but not module_name
+        if server_name and module_name == "default":
+            module_name = server_name
+
+        self.module_name = module_name  # 모듈 이름 (테이블 접미사로 사용 및 redirect URI 생성)
+        self.server_name = self.module_name  # Deprecated, kept for backward compatibility
 
         # DB 경로 설정: 환경변수 > auth_{module_name}.db
         from pathlib import Path
