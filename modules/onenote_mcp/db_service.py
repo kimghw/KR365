@@ -3,7 +3,11 @@ OneNote MCP Database Service
 섹션과 페이지를 하나의 통합 테이블로 관리
 """
 
-from infra.core.database import get_database_manager
+import os
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 from infra.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -13,8 +17,72 @@ class OneNoteDBService:
     """OneNote 데이터베이스 서비스 (통합 테이블)"""
 
     def __init__(self):
-        self.db = get_database_manager()
-        logger.info("✅ OneNoteDBService initialized")
+        # config.json에서 데이터베이스 경로 설정 읽기
+        config_path = Path(__file__).parent / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = json.load(f)
+                db_config = config.get("database", {})
+                default_path = db_config.get("default_path", "./data/onenote.db")
+        else:
+            default_path = "./data/onenote.db"
+
+        # 환경변수 우선, 없으면 config.json 설정 사용
+        db_path = os.getenv("DATABASE_ONENOTE_PATH", default_path)
+
+        # 상대 경로를 절대 경로로 변환
+        if not Path(db_path).is_absolute():
+            project_root = Path(__file__).parent.parent.parent
+            db_path = str(project_root / db_path)
+
+        # 디렉토리 생성
+        db_dir = Path(db_path).parent
+        db_dir.mkdir(parents=True, exist_ok=True)
+
+        self.db_path = db_path
+        self.db = self  # 자기 자신을 db로 설정하여 기존 코드와 호환성 유지
+        logger.info(f"✅ OneNoteDBService initialized with DB: {db_path}")
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """데이터베이스 연결 반환"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row  # dict처럼 사용 가능
+        return conn
+
+    def execute_query(self, query: str, params: tuple = ()) -> None:
+        """쿼리 실행 (INSERT, UPDATE, DELETE 등)"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Query execution failed: {e}")
+            raise
+
+    def fetch_one(self, query: str, params: tuple = ()) -> Optional[Dict]:
+        """단일 결과 조회"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Fetch one failed: {e}")
+            return None
+
+    def fetch_all(self, query: str, params: tuple = ()) -> List[Dict]:
+        """전체 결과 조회"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Fetch all failed: {e}")
+            return []
 
     def initialize_tables(self):
         """
