@@ -43,6 +43,9 @@ class FastAPIMailAttachmentServer:
         # Initialize database connection and check authentication
         self._initialize_and_check_auth()
 
+        # Sync accounts from DCR auth database
+        self._sync_accounts_from_dcr()
+
         # MCP Handlers
         self.handlers = MCPHandlers()
 
@@ -68,6 +71,19 @@ class FastAPIMailAttachmentServer:
             except Exception as e:
                 logger.warning(f"config.json 읽기 실패: {e}")
         return "mail_query"
+
+    def _sync_accounts_from_dcr(self):
+        """Sync accounts from auth_outlook.db to outlook.db"""
+        try:
+            from ...dcr_oauth_module.outlook_db_service import OutlookDBService
+            outlook_db = OutlookDBService()
+            synced = outlook_db.sync_accounts_from_dcr()
+            if synced > 0:
+                logger.info(f"✅ Synced {synced} accounts from auth_outlook.db to outlook.db")
+            else:
+                logger.info("📋 No accounts to sync from auth_outlook.db")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to sync accounts from DCR: {str(e)}")
 
     def _initialize_and_check_auth(self):
         """Initialize database connection and check authentication status"""

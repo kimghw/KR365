@@ -20,6 +20,7 @@ from infra.core.logger import get_logger, log_api_request, log_api_response
 from .database_manager import get_teams_database
 from ..handlers import TeamsHandlers
 from ..middleware.auth_dependencies import optional_auth, required_auth
+from ...dcr_oauth_module.teams_db_service import TeamsDBService
 
 logger = get_logger(__name__)
 auth_logger = get_auth_logger()
@@ -40,8 +41,14 @@ class FastAPITeamsServer:
         # Database (Teams 전용)
         self.db = get_teams_database()
 
+        # Teams DB Service for account management
+        self.db_service = TeamsDBService(db_name="teams")
+
         # Initialize database connection and check authentication
         self._initialize_and_check_auth()
+
+        # Sync accounts from DCR auth database
+        self._sync_accounts_from_dcr()
 
         # MCP Handlers
         self.handlers = TeamsHandlers()
@@ -68,6 +75,17 @@ class FastAPITeamsServer:
             except Exception as e:
                 logger.warning(f"config.json 읽기 실패: {e}")
         return "teams"
+
+    def _sync_accounts_from_dcr(self):
+        """Sync accounts from auth_teams.db to teams.db"""
+        try:
+            synced = self.db_service.sync_accounts_from_dcr()
+            if synced > 0:
+                logger.info(f"✅ Synced {synced} accounts from auth_teams.db to teams.db")
+            else:
+                logger.info("📋 No accounts to sync from auth_teams.db")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to sync accounts from DCR: {str(e)}")
 
     def _initialize_and_check_auth(self):
         """Initialize database connection and check authentication status"""

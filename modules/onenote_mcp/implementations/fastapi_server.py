@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from infra.core.auth_logger import get_auth_logger
 from infra.core.logger import get_logger, log_api_request, log_api_response
-from ..db_service import OneNoteDBService
+from ...dcr_oauth_module.onenote_db_service import OneNoteDBService
 from ..handlers import OneNoteHandlers
 from ..middleware.auth_dependencies import optional_auth, required_auth
 

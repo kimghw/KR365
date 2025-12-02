@@ -9,7 +9,7 @@ from mcp.types import Tool, TextContent
 
 from infra.core.logger import get_logger
 from .onenote_handler import OneNoteHandler
-from .db_service import OneNoteDBService
+from ..dcr_oauth_module.onenote_db_service import OneNoteDBService
 from .schemas import (
     ListNotebooksRequest,
     ListNotebooksResponse,

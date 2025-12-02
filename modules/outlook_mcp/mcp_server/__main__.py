@@ -43,10 +43,10 @@ def main():
         print("   Recommended: Use entrypoints/run_stdio.py for proper setup.", file=sys.stderr)
         asyncio.run(run_stdio_server())
     else:
-        # Run HTTP server
-        from .http_server import HTTPStreamingMailAttachmentServer
+        # Run FastAPI server
+        from ..implementations.fastapi_server import FastAPIMailAttachmentServer
 
-        server = HTTPStreamingMailAttachmentServer(host=args.host, port=args.port)
+        server = FastAPIMailAttachmentServer(host=args.host, port=args.port)
         server.run()
 
 

@@ -10,14 +10,16 @@ SERVER_TYPE="${SERVER_TYPE:-mail_query}"
 
 # Configuration based on server type
 case "$SERVER_TYPE" in
-    mail_query)
-        FASTAPI_PID_FILE="/tmp/mail_query_fastapi.pid"
-        FASTAPI_LOG_FILE="logs/mail_query_fastapi.log"
+    mail_query|outlook)
+        FASTAPI_PID_FILE="/tmp/outlook_fastapi.pid"
+        FASTAPI_LOG_FILE="logs/outlook_fastapi.log"
         FASTAPI_PORT=${MAIL_API_PORT:-8001}
         FASTAPI_SCRIPT="modules/outlook_mcp/entrypoints/run_fastapi.py"
-        # DCR_DATABASE_PATH 제거 - 서버별로 자동 생성됨 (auth_mail_query.db)
-        export DATABASE_MAIL_QUERY_PATH="${SCRIPT_DIR}/data/mail_query.db"
-        SERVER_DISPLAY_NAME="Mail Query"
+        # DCR_DATABASE_PATH 제거 - 서버별로 자동 생성됨 (auth_outlook.db)
+        export DATABASE_OUTLOOK_PATH="${SCRIPT_DIR}/data/outlook.db"
+        # 레거시 호환성
+        export DATABASE_MAIL_QUERY_PATH="${SCRIPT_DIR}/data/outlook.db"
+        SERVER_DISPLAY_NAME="Outlook"
         ;;
     onenote)
         FASTAPI_PID_FILE="/tmp/onenote_fastapi.pid"
@@ -39,7 +41,7 @@ case "$SERVER_TYPE" in
         ;;
     *)
         echo "❌ Unknown server type: $SERVER_TYPE"
-        echo "Valid values: mail_query, onenote, teams"
+        echo "Valid values: mail_query, outlook, onenote, teams"
         exit 1
         ;;
 esac
@@ -367,7 +369,7 @@ case "${1:-start-dashboard}" in
         echo "  logs                  - Show live logs from all servers"
         echo ""
         echo "Environment variables:"
-        echo "  SERVER_TYPE           - Server to run: mail_query|onenote|teams (default: mail_query)"
+        echo "  SERVER_TYPE           - Server to run: mail_query|outlook|onenote|teams (default: mail_query)"
         echo "  DASHBOARD_PORT        - Port for dashboard (default: 8000)"
         echo "  MAIL_API_PORT         - Port for Mail Query FastAPI (default: 8001)"
         echo "  ONENOTE_SERVER_PORT   - Port for OneNote FastAPI (default: 8002)"

@@ -1,4 +1,4 @@
-"""Mail Query MCP 모듈 전용 DatabaseManager"""
+"""Outlook MCP 모듈 전용 DatabaseManager"""
 
 import sqlite3
 import threading
@@ -12,19 +12,19 @@ from infra.core.database import DatabaseManager as BaseDatabaseManager
 logger = get_logger(__name__)
 
 
-class MailQueryDatabaseManager(BaseDatabaseManager):
-    """Mail Query 모듈 전용 DatabaseManager"""
+class OutlookDatabaseManager(BaseDatabaseManager):
+    """Outlook 모듈 전용 DatabaseManager"""
 
     def __init__(self):
-        """Mail Query 데이터베이스 매니저 초기화"""
+        """Outlook 데이터베이스 매니저 초기화"""
         super().__init__()
-        # config의 mail_query_database_path를 사용하도록 오버라이드
+        # config의 outlook_database_path를 사용하도록 오버라이드
 
     def _get_connection(self) -> sqlite3.Connection:
-        """데이터베이스 연결을 반환 (mail_query 전용 경로 사용)"""
+        """데이터베이스 연결을 반환 (outlook 전용 경로 사용)"""
         # DB 파일이 삭제된 경우를 감지하여 재초기화
         if self._connection is not None:
-            db_path = Path(self.config.mail_query_database_path)
+            db_path = Path(self.config.outlook_database_path)
             if not db_path.exists():
                 logger.warning(f"데이터베이스 파일이 삭제되었습니다. 재초기화합니다: {db_path}")
                 self._connection.close()
@@ -42,11 +42,11 @@ class MailQueryDatabaseManager(BaseDatabaseManager):
         return self._connection
 
     def _connect(self) -> None:
-        """Mail Query 데이터베이스에 연결"""
+        """Outlook 데이터베이스에 연결"""
         try:
-            # mail_query_database_path 사용
-            db_path = self.config.mail_query_database_path
-            logger.info(f"Mail Query 데이터베이스 연결 시도: {db_path}")
+            # outlook_database_path 사용
+            db_path = self.config.outlook_database_path
+            logger.info(f"Outlook 데이터베이스 연결 시도: {db_path}")
 
             # 데이터베이스 파일 경로 확인
             db_file = Path(db_path)
@@ -65,19 +65,23 @@ class MailQueryDatabaseManager(BaseDatabaseManager):
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA foreign_keys=ON")
 
-            logger.info(f"Mail Query 데이터베이스 연결 성공: {db_path}")
+            logger.info(f"Outlook 데이터베이스 연결 성공: {db_path}")
 
         except sqlite3.Error as e:
-            logger.error(f"Mail Query 데이터베이스 연결 실패: {e}")
+            logger.error(f"Outlook 데이터베이스 연결 실패: {e}")
             raise
 
 
 @lru_cache(maxsize=1)
-def get_mail_query_database() -> MailQueryDatabaseManager:
+def get_outlook_database() -> OutlookDatabaseManager:
     """
-    Mail Query 데이터베이스 매니저 인스턴스를 반환하는 레이지 싱글톤 함수
+    Outlook 데이터베이스 매니저 인스턴스를 반환하는 레이지 싱글톤 함수
 
     Returns:
-        MailQueryDatabaseManager: Mail Query 데이터베이스 매니저 인스턴스
+        OutlookDatabaseManager: Outlook 데이터베이스 매니저 인스턴스
     """
-    return MailQueryDatabaseManager()
+    return OutlookDatabaseManager()
+
+# 레거시 호환성을 위한 별칭
+MailQueryDatabaseManager = OutlookDatabaseManager
+get_mail_query_database = get_outlook_database

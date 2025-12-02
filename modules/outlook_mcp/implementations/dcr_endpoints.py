@@ -10,6 +10,7 @@ from modules.dcr_oauth_module import DCRService
 from infra.core.logger import get_logger
 import json
 import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -35,6 +36,10 @@ def add_dcr_endpoints(app):
     # 모듈 이름을 한 번만 로드
     MODULE_NAME = _get_module_name_from_config()
     logger.info(f"📋 DCR endpoints using module_name: {MODULE_NAME}")
+
+    # Outlook DB Service for account management
+    from ...dcr_oauth_module.outlook_db_service import OutlookDBService
+    outlook_db_service = OutlookDBService()
 
     # Add middleware to log raw requests for /oauth/token endpoint
     @app.middleware("http")
@@ -270,12 +275,14 @@ def add_dcr_endpoints(app):
             )
 
             # Store token information in metadata for later use
-            metadata_dict["azure_tokens"] = {
-                "access_token": token_info.get("access_token"),
-                "refresh_token": token_info.get("refresh_token"),
-                "expires_in": token_info.get("expires_in"),
-                "scope": token_info.get("scope"),
-            }
+            # Convert any datetime objects to ISO format strings for JSON serialization
+            serializable_token_info = {}
+            for key, value in token_info.items():
+                if isinstance(value, datetime):
+                    serializable_token_info[key] = value.isoformat()
+                else:
+                    serializable_token_info[key] = value
+            metadata_dict["azure_tokens"] = serializable_token_info
             # Store user info for later use (will be needed in /oauth/token)
             metadata_dict["azure_user_info"] = {
                 "object_id": None,  # Will be set after fetching user info
@@ -322,6 +329,63 @@ def add_dcr_endpoints(app):
                             # Update authorization code (no need to set azure_object_id in tokens table)
                             dcr_service.update_auth_code_with_object_id(state, azure_object_id, user_email, display_name)
                             logger.info(f"✅ Updated auth code {state[:10]}... with user: {user_email} (object_id: {azure_object_id})")
+
+                            # Save account to Outlook database with tokens and fill NULL values
+                            token_expiry = datetime.now(timezone.utc) + timedelta(seconds=token_info.get("expires_in", 3600))
+
+                            # Get Azure app info from DCR service to fill NULL OAuth fields
+                            oauth_client_id = dcr_service.azure_application_id
+                            oauth_tenant_id = dcr_service.azure_tenant_id
+                            oauth_redirect_uri = dcr_service.azure_redirect_uri
+                            oauth_client_secret = dcr_service.azure_client_secret
+
+                            # Get scopes/permissions from token
+                            scopes = token_info.get("scope", "").split() if token_info.get("scope") else []
+                            delegated_permissions = " ".join(scopes) if scopes else "Mail.Read Mail.ReadWrite User.Read"
+
+                            # Update account with complete information
+                            outlook_db_service.execute_query("""
+                                INSERT INTO accounts (
+                                    user_id, user_name, email,
+                                    oauth_client_id, oauth_client_secret, oauth_tenant_id, oauth_redirect_uri,
+                                    delegated_permissions, auth_type, status,
+                                    access_token, refresh_token, token_expiry,
+                                    is_active, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                                ON CONFLICT(user_id) DO UPDATE SET
+                                    user_name = COALESCE(excluded.user_name, user_name),
+                                    email = COALESCE(excluded.email, email),
+                                    oauth_client_id = COALESCE(excluded.oauth_client_id, oauth_client_id),
+                                    oauth_client_secret = COALESCE(excluded.oauth_client_secret, oauth_client_secret),
+                                    oauth_tenant_id = COALESCE(excluded.oauth_tenant_id, oauth_tenant_id),
+                                    oauth_redirect_uri = COALESCE(excluded.oauth_redirect_uri, oauth_redirect_uri),
+                                    delegated_permissions = COALESCE(excluded.delegated_permissions, delegated_permissions),
+                                    auth_type = 'DCR OAuth',
+                                    status = 'active',
+                                    access_token = excluded.access_token,
+                                    refresh_token = excluded.refresh_token,
+                                    token_expiry = excluded.token_expiry,
+                                    is_active = TRUE,
+                                    updated_at = datetime('now')
+                            """, (
+                                user_email,  # user_id
+                                display_name or user_email,  # user_name (use display_name if available)
+                                user_email,  # email
+                                oauth_client_id,
+                                oauth_client_secret,  # oauth_client_secret
+                                oauth_tenant_id,
+                                oauth_redirect_uri,
+                                delegated_permissions,
+                                'DCR OAuth',  # auth_type
+                                'active',  # status
+                                token_info["access_token"],
+                                token_info.get("refresh_token"),
+                                token_expiry.isoformat(),
+                                True  # is_active
+                            ))
+
+                            logger.info(f"✅ Updated account in Outlook database with complete info: {user_email}")
+
                             break  # Success, exit retry loop
 
                         # Retry on rate limit or server errors
@@ -625,6 +689,17 @@ def add_dcr_endpoints(app):
                 user_name=user_name,
             )
 
+            # Update Outlook database with new tokens
+            outlook_db_service.upsert_account(
+                user_id=user_email,
+                access_token=token_info["access_token"],
+                refresh_token=token_info.get("refresh_token"),
+                token_expiry=azure_expiry,
+                scopes=code_data["scope"].split() if code_data.get("scope") else [],
+                is_active=True
+            )
+            logger.info(f"✅ Outlook account updated with new tokens: {user_email}")
+
             logger.info(f"✅ Token issued for DCR client: {client_id}")
 
             return JSONResponse(
@@ -707,6 +782,17 @@ def add_dcr_endpoints(app):
                 user_email=azure_tokens.get("user_email"),
                 user_name=refresh_data.get("user_name"),
             )
+
+            # Update Outlook database with refreshed tokens
+            outlook_db_service.upsert_account(
+                user_id=azure_tokens.get("user_email") or refresh_data.get("user_email"),
+                access_token=new_azure_tokens["access_token"],
+                refresh_token=new_azure_tokens.get("refresh_token", azure_tokens["refresh_token"]),
+                token_expiry=azure_expiry,
+                scopes=scope.split() if scope else [],
+                is_active=True
+            )
+            logger.info(f"✅ Outlook account updated with refreshed tokens")
 
             # Invalidate old refresh token to prevent reuse
             dcr_service.db_service.execute_query(

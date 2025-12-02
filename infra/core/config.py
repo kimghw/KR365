@@ -103,7 +103,17 @@ class Config:
             # 모듈별 DB 사용 시 경고 안 나오게 처리
             if os.getenv("DATABASE_ONENOTE_PATH"):
                 path = os.getenv("DATABASE_ONENOTE_PATH")
+            # 모듈별 DB 환경변수 확인
+            elif os.getenv("DATABASE_OUTLOOK_PATH"):
+                path = os.getenv("DATABASE_OUTLOOK_PATH")
+            elif os.getenv("DATABASE_TEAMS_PATH"):
+                path = os.getenv("DATABASE_TEAMS_PATH")
+            elif os.getenv("DATABASE_CALENDAR_PATH"):
+                path = os.getenv("DATABASE_CALENDAR_PATH")
+            elif os.getenv("DATABASE_ONEDRIVE_PATH"):
+                path = os.getenv("DATABASE_ONEDRIVE_PATH")
             elif os.getenv("DATABASE_MAIL_QUERY_PATH"):
+                # 레거시 호환성
                 path = os.getenv("DATABASE_MAIL_QUERY_PATH")
             else:
                 default_path = "./data/iacsgraph.db"
@@ -127,20 +137,29 @@ class Config:
         db_dir.mkdir(parents=True, exist_ok=True)
         return path
 
-    @property
-    def mail_query_database_path(self) -> str:
-        """Mail Query 모듈 전용 SQLite 데이터베이스 파일 경로"""
-        path = os.getenv("DATABASE_MAIL_QUERY_PATH")
+    def _get_module_database_path(self, module_name: str) -> str:
+        """
+        모듈별 데이터베이스 경로를 동적으로 가져오는 공통 메서드
+
+        Args:
+            module_name: 모듈 이름 (outlook, teams, onenote 등)
+
+        Returns:
+            데이터베이스 파일 경로
+        """
+        # 환경변수 이름 생성 (예: DATABASE_OUTLOOK_PATH)
+        env_var_name = f"DATABASE_{module_name.upper()}_PATH"
+        path = os.getenv(env_var_name)
 
         # OnRender 환경 감지 및 특별 처리
         if os.getenv("RENDER"):
             if not path or path.startswith("./"):
-                default_path = "/opt/render/project/src/data/mail_query.db"
-                logger.info(f"OnRender 환경 감지: Mail Query 데이터베이스 경로를 {default_path}로 설정")
+                default_path = f"/opt/render/project/src/data/{module_name.lower()}.db"
+                logger.info(f"OnRender 환경 감지: {module_name} 데이터베이스 경로를 {default_path}로 설정")
                 path = default_path
         elif not path:
-            default_path = "./data/mail_query.db"
-            logger.info(f"DATABASE_MAIL_QUERY_PATH 미설정. 기본값 사용: {default_path}")
+            default_path = f"./data/{module_name.lower()}.db"
+            logger.info(f"{env_var_name} 미설정. 기본값 사용: {default_path}")
             path = default_path
 
         # 상대 경로를 절대 경로로 변환
@@ -152,32 +171,76 @@ class Config:
         db_dir = Path(path).parent
         db_dir.mkdir(parents=True, exist_ok=True)
         return path
+
+    def get_module_auth_database_path(self, module_name: str) -> str:
+        """
+        모듈별 인증 데이터베이스 경로를 가져오는 메서드
+        DCR 모듈에서 사용하기 위한 공개 메서드
+
+        Args:
+            module_name: 모듈 이름 (outlook, teams, onenote 등)
+
+        Returns:
+            인증 데이터베이스 파일 경로 (예: data/auth_outlook.db)
+        """
+        # 환경변수 이름 생성 (예: AUTH_DATABASE_OUTLOOK_PATH)
+        env_var_name = f"AUTH_DATABASE_{module_name.upper()}_PATH"
+        path = os.getenv(env_var_name)
+
+        # OnRender 환경 감지 및 특별 처리
+        if os.getenv("RENDER"):
+            if not path or path.startswith("./"):
+                default_path = f"/opt/render/project/src/data/auth_{module_name.lower()}.db"
+                logger.info(f"OnRender 환경 감지: {module_name} 인증 데이터베이스 경로를 {default_path}로 설정")
+                path = default_path
+        elif not path:
+            default_path = f"./data/auth_{module_name.lower()}.db"
+            logger.debug(f"{env_var_name} 미설정. 기본값 사용: {default_path}")
+            path = default_path
+
+        # 상대 경로를 절대 경로로 변환
+        if not Path(path).is_absolute() and not os.getenv("RENDER"):
+            project_root = Path(__file__).parent.parent.parent
+            path = str(project_root / path)
+
+        # 디렉터리가 없으면 생성
+        db_dir = Path(path).parent
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def outlook_database_path(self) -> str:
+        """Outlook 모듈 전용 SQLite 데이터베이스 파일 경로"""
+        return self._get_module_database_path("outlook")
 
     @property
     def teams_database_path(self) -> str:
         """Teams 모듈 전용 SQLite 데이터베이스 파일 경로"""
-        path = os.getenv("DATABASE_TEAMS_PATH")
+        return self._get_module_database_path("teams")
 
-        # OnRender 환경 감지 및 특별 처리
-        if os.getenv("RENDER"):
-            if not path or path.startswith("./"):
-                default_path = "/opt/render/project/src/data/teams.db"
-                logger.info(f"OnRender 환경 감지: Teams 데이터베이스 경로를 {default_path}로 설정")
-                path = default_path
-        elif not path:
-            default_path = "./data/teams.db"
-            logger.info(f"DATABASE_TEAMS_PATH 미설정. 기본값 사용: {default_path}")
-            path = default_path
+    @property
+    def onenote_database_path(self) -> str:
+        """OneNote 모듈 전용 SQLite 데이터베이스 파일 경로"""
+        return self._get_module_database_path("onenote")
 
-        # 상대 경로를 절대 경로로 변환
-        if not Path(path).is_absolute() and not os.getenv("RENDER"):
-            project_root = Path(__file__).parent.parent.parent
-            path = str(project_root / path)
+    @property
+    def onedrive_database_path(self) -> str:
+        """OneDrive 모듈 전용 SQLite 데이터베이스 파일 경로"""
+        return self._get_module_database_path("onedrive")
 
-        # 디렉터리가 없으면 생성
-        db_dir = Path(path).parent
-        db_dir.mkdir(parents=True, exist_ok=True)
-        return path
+    @property
+    def calendar_database_path(self) -> str:
+        """Calendar 모듈 전용 SQLite 데이터베이스 파일 경로"""
+        return self._get_module_database_path("calendar")
+
+    # 레거시 호환성을 위한 별칭
+    @property
+    def mail_query_database_path(self) -> str:
+        """Mail Query 데이터베이스 경로 (deprecated - outlook_database_path 사용)"""
+        # 레거시 환경변수 확인
+        if os.getenv("DATABASE_MAIL_QUERY_PATH"):
+            return os.getenv("DATABASE_MAIL_QUERY_PATH")
+        return self.outlook_database_path
 
     @property
     def dcr_database_path(self) -> str:
