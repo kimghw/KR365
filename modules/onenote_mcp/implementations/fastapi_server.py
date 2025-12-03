@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from infra.core.auth_logger import get_auth_logger
 from infra.core.logger import get_logger, log_api_request, log_api_response
-from ...dcr_oauth_module.onenote_db_service import OneNoteDBService
+from ..onenote_db_service import OneNoteDBService
 from ..handlers import OneNoteHandlers
 from ..middleware.auth_dependencies import optional_auth, required_auth
 
@@ -479,8 +479,11 @@ All MCP requests should be sent to the root endpoint `/` as POST requests.
             }
 
         # === DCR OAuth Endpoints (Standard RFC 7591) ===
-        from .dcr_endpoints import add_dcr_endpoints
-        add_dcr_endpoints(app)
+        from modules.dcr_oauth_module.fastapi_endpoints import add_dcr_endpoints
+        from ..onenote_db_service import OneNoteDBService
+
+        onenote_db = OneNoteDBService()
+        add_dcr_endpoints(app, onenote_db, server_type="onenote")
         logger.info("🔐 DCR OAuth endpoints added (/oauth/*)")
 
         logger.info("📚 FastAPI app created - OpenAPI available at /docs")

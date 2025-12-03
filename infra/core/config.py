@@ -89,7 +89,7 @@ class Config:
     # 데이터베이스 설정
     @property
     def database_path(self) -> str:
-        """SQLite 데이터베이스 파일 경로"""
+        """SQLite 데이터베이스 파일 경로 - 현재 실행 중인 모듈을 자동 감지"""
         path = os.getenv("DATABASE_PATH")
 
         # OnRender 환경 감지 및 특별 처리
@@ -100,10 +100,51 @@ class Config:
                 logger.info(f"OnRender 환경 감지: 데이터베이스 경로를 {default_path}로 설정")
                 path = default_path
         elif not path:
-            # 모듈별 DB 사용 시 경고 안 나오게 처리
-            if os.getenv("DATABASE_ONENOTE_PATH"):
+            # 현재 실행 중인 모듈 자동 감지
+            import sys
+            import inspect
+
+            # 스택 추적을 통해 호출 모듈 감지
+            current_module = None
+            for frame_info in inspect.stack():
+                frame_module = frame_info.filename
+                if 'modules/outlook_mcp' in frame_module or 'modules/mail_query' in frame_module:
+                    current_module = 'outlook'
+                    break
+                elif 'modules/teams_mcp' in frame_module:
+                    current_module = 'teams'
+                    break
+                elif 'modules/onenote_mcp' in frame_module:
+                    current_module = 'onenote'
+                    break
+                elif 'modules/calendar_mcp' in frame_module:
+                    current_module = 'calendar'
+                    break
+                elif 'modules/onedrive_mcp' in frame_module:
+                    current_module = 'onedrive'
+                    break
+
+            # 실행 명령줄에서 모듈 감지 (fallback)
+            if not current_module and len(sys.argv) > 0:
+                cmd_path = sys.argv[0]
+                if 'outlook_mcp' in cmd_path or 'mail_query' in cmd_path:
+                    current_module = 'outlook'
+                elif 'teams_mcp' in cmd_path:
+                    current_module = 'teams'
+                elif 'onenote_mcp' in cmd_path:
+                    current_module = 'onenote'
+                elif 'calendar_mcp' in cmd_path:
+                    current_module = 'calendar'
+                elif 'onedrive_mcp' in cmd_path:
+                    current_module = 'onedrive'
+
+            # 감지된 모듈에 따라 DB 경로 설정
+            if current_module:
+                path = f"./data/{current_module}.db"
+                logger.info(f"🎯 자동 감지된 모듈: {current_module} → DB: {path}")
+            # 모듈별 DB 환경변수 확인 (fallback)
+            elif os.getenv("DATABASE_ONENOTE_PATH"):
                 path = os.getenv("DATABASE_ONENOTE_PATH")
-            # 모듈별 DB 환경변수 확인
             elif os.getenv("DATABASE_OUTLOOK_PATH"):
                 path = os.getenv("DATABASE_OUTLOOK_PATH")
             elif os.getenv("DATABASE_TEAMS_PATH"):

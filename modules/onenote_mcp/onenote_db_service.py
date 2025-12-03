@@ -17,6 +17,8 @@ class OneNoteDBService(BaseDBService):
     def __init__(self):
         """Initialize OneNote DB Service"""
         # Use 'onenote' as server name
+        # BaseDBService will automatically use DATABASE_ONENOTE_PATH env var
+        # or default to data/onenote.db
         super().__init__(server_name='onenote')
 
         # Self reference for backward compatibility

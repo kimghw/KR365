@@ -20,7 +20,7 @@ from infra.core.logger import get_logger, log_api_request, log_api_response
 from .database_manager import get_teams_database
 from ..handlers import TeamsHandlers
 from ..middleware.auth_dependencies import optional_auth, required_auth
-from ...dcr_oauth_module.teams_db_service import TeamsDBService
+from ..teams_db_service import TeamsDBService
 
 logger = get_logger(__name__)
 auth_logger = get_auth_logger()
@@ -692,8 +692,11 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
 
         # === DCR OAuth Endpoints (Standard RFC 7591) ===
         # These are the standard endpoints for MCP Connector OAuth2 flow
-        from .dcr_endpoints import add_dcr_endpoints
-        add_dcr_endpoints(app)
+        from modules.dcr_oauth_module.fastapi_endpoints import add_dcr_endpoints
+        from ..teams_db_service import TeamsDBService
+
+        teams_db = TeamsDBService()
+        add_dcr_endpoints(app, teams_db, server_type="teams")
         logger.info("🔐 DCR OAuth endpoints added (/oauth/*)")
 
         # Initialize OpenAI wrapper

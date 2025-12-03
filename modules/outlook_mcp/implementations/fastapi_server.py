@@ -75,7 +75,7 @@ class FastAPIMailAttachmentServer:
     def _sync_accounts_from_dcr(self):
         """Sync accounts from auth_outlook.db to outlook.db"""
         try:
-            from ...dcr_oauth_module.outlook_db_service import OutlookDBService
+            from ..outlook_db_service import OutlookDBService
             outlook_db = OutlookDBService()
             synced = outlook_db.sync_accounts_from_dcr()
             if synced > 0:
@@ -1059,8 +1059,11 @@ Send MCP (Model Context Protocol) requests using JSON-RPC 2.0 format.
 
         # === DCR OAuth Endpoints (Standard RFC 7591) ===
         # These are the standard endpoints for MCP Connector OAuth2 flow
-        from .dcr_endpoints import add_dcr_endpoints
-        add_dcr_endpoints(app)
+        from modules.dcr_oauth_module.fastapi_endpoints import add_dcr_endpoints
+        from ..outlook_db_service import OutlookDBService
+
+        outlook_db = OutlookDBService()
+        add_dcr_endpoints(app, outlook_db, server_type="outlook")
         logger.info("🔐 DCR OAuth endpoints added (/oauth/*)")
 
         # Add /callback as an alias for /auth/callback (for OAuth compatibility)

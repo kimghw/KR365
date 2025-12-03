@@ -1367,11 +1367,15 @@ class DCRService:
         # 1. dcr_azure_users에 사용자 정보 저장/업데이트 (토큰 없이 기본 정보만)
         if azure_object_id and user_email:
             # 기본 사용자 정보만 저장 (토큰은 나중에 store_tokens에서 업데이트)
+            # 임시 토큰 값 사용 (NOT NULL 제약 때문)
+            from datetime import datetime, timedelta, timezone
+            temp_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
             azure_user_query = """
             INSERT INTO dcr_azure_users (
                 object_id, application_id, user_email, user_name,
                 access_token, refresh_token, expires_at, scope, updated_at
-            ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, 'pending', NULL, ?, NULL, CURRENT_TIMESTAMP)
             ON CONFLICT(object_id) DO UPDATE SET
                 user_email = COALESCE(excluded.user_email, user_email),
                 user_name = COALESCE(excluded.user_name, user_name),
@@ -1387,6 +1391,7 @@ class DCRService:
                         self.azure_application_id,
                         user_email,
                         display_name,
+                        temp_expiry,
                     ),
                 )
                 logger.info(f"✅ Updated dcr_azure_users for object_id: {azure_object_id}, email: {user_email}")
@@ -1451,9 +1456,9 @@ class DCRService:
                 logger.warning(f"User email missing, cannot sync to accounts table")
                 return
 
-            # graphapi.db 연결
-            from infra.core.db_manager import get_database_manager
-            db_manager = get_database_manager()
+            # accounts 테이블 동기화는 각 서버의 DB 서비스에서 처리
+            logger.debug("Skipping accounts table sync - handled by server's DB service")
+            return
 
             # user_id는 이메일의 로컬 파트 사용
             auto_user_id = user_email.split("@")[0] if "@" in user_email else user_email
@@ -1783,7 +1788,7 @@ class DCRService:
                 # 서비스별 기본 권한 설정
                 default_scopes = {
                     'onenote': 'User.Read offline_access Notes.Read Notes.ReadWrite',
-                    'teams': 'User.Read offline_access Team.ReadBasic.All Channel.ReadBasic.All Chat.Read'
+                    'teams': 'User.Read offline_access Chat.Read Chat.ReadWrite'
                 }
 
                 delegated_permissions = default_scopes.get(service_name, 'User.Read offline_access')

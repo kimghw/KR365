@@ -24,15 +24,29 @@ class BaseDBService:
                         Used for both auth DB and service DB naming
         """
         self.server_name = server_name
-
-        # Service DB path: data/{server_name}.db
         project_root = Path(__file__).parent.parent
-        self.db_path = str(project_root / "data" / f"{server_name}.db")
+
+        # Service DB path: Check module-specific environment variable first
+        # This allows each module to override the default path
+        env_var_name = f"DATABASE_{server_name.upper()}_PATH"
+        self.db_path = os.getenv(env_var_name)
+
+        if not self.db_path:
+            # Use default path: data/{server_name}.db
+            self.db_path = str(project_root / "data" / f"{server_name}.db")
+            logger.debug(f"No {env_var_name} set, using default: {self.db_path}")
+        elif not Path(self.db_path).is_absolute():
+            # Convert relative path to absolute
+            self.db_path = str(project_root / self.db_path)
 
         # Auth DB path: data/auth_{server_name}.db
-        self.auth_db_path = os.getenv("DCR_DATABASE_PATH")
+        auth_env_var = f"AUTH_DATABASE_{server_name.upper()}_PATH"
+        self.auth_db_path = os.getenv(auth_env_var) or os.getenv("DCR_DATABASE_PATH")
+
         if not self.auth_db_path:
             self.auth_db_path = str(project_root / "data" / f"auth_{server_name}.db")
+        elif not Path(self.auth_db_path).is_absolute():
+            self.auth_db_path = str(project_root / self.auth_db_path)
 
         self._ensure_database_exists()
         logger.info(f"📚 {server_name.capitalize()} DB Service initialized: {self.db_path}")
@@ -84,6 +98,25 @@ class BaseDBService:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts (user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts (email)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_accounts_is_active ON accounts (is_active)")
+
+            # Create oauth_flow_logs table for request logger middleware
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS oauth_flow_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    flow_type TEXT,
+                    dcr_client_id TEXT,
+                    azure_object_id TEXT,
+                    state TEXT,
+                    redirect_uri TEXT,
+                    scope TEXT,
+                    grant_type TEXT,
+                    status TEXT,
+                    error_code TEXT,
+                    error_description TEXT,
+                    duration_ms INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
             conn.commit()
             logger.info(f"✅ Database tables verified/created for {self.server_name}.db")
@@ -250,7 +283,7 @@ class BaseDBService:
     def _get_default_permissions(self) -> str:
         """Get default permissions based on server type"""
         default_permissions = {
-            'teams': 'User.Read Chat.Read Chat.ReadWrite ChannelMessage.Read ChannelMessage.Send offline_access',
+            'teams': 'User.Read Chat.Read Chat.ReadWrite offline_access',
             'onenote': 'User.Read Notes.Read Notes.ReadWrite offline_access',
             'outlook': 'User.Read Mail.Read Mail.ReadWrite Mail.Send offline_access',
             'mail_query': 'User.Read Mail.Read Mail.ReadWrite Mail.Send offline_access',  # Legacy support
